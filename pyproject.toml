@@ -1,0 +1,11 @@
+[project]
+name = "oeisprog"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "num2words>=0.5.14",
+    "numpy>=2.3.5",
+    "sympy>=1.14.0",
+]
