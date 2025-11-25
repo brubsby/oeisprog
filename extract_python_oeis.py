@@ -64,6 +64,19 @@ def sanitize_code(source_code):
         print("Python 3.9+ required for ast.unparse")
         return source_code, False
 
+    # AST Transformation: Check if the last node in guard_nodes is an Expr (expression statement)
+    # and if it is a ListComp or List. If so, wrap it in print().
+    if guard_nodes:
+        last_node = guard_nodes[-1]
+        if isinstance(last_node, ast.Expr) and isinstance(last_node.value, (ast.ListComp, ast.List)):
+            # Replace Expr(value) with Expr(Call(func=Name('print'), args=[value]))
+            print_call = ast.Call(
+                func=ast.Name(id='print', ctx=ast.Load()),
+                args=[last_node.value],
+                keywords=[]
+            )
+            guard_nodes[-1] = ast.Expr(value=print_call)
+
     # Create the guard: if __name__ == "__main__":
     guard_test = ast.Compare(
         left=ast.Name(id='__name__', ctx=ast.Load()),

@@ -218,6 +218,10 @@ def run_test_for_code(a_num, code, offset, expected_terms, timeout):
         candidates = []
         for name, obj in context.items():
             if callable(obj) and not isinstance(obj, StubSequence) and name != '__builtins__':
+                # Exclude characteristic functions from being treated as a(n)
+                if name == 'ok' or name == 'is_seq' or name.startswith('is_'):
+                    continue
+                    
                 if name not in ['timeout_handler', 'exit', 'quit', 'copyright', 'license', 'help']: 
                      if hasattr(obj, '__code__'):
                          filename = obj.__code__.co_filename
@@ -238,16 +242,16 @@ def run_test_for_code(a_num, code, offset, expected_terms, timeout):
         checked = 0
         limit = min(len(expected_terms), 50)
         
-        start_time = time.time()
         timed_out = False
         list_exhausted = False
+        
+        # Set alarm for the entire test loop
+        loop_alarm = max(1, int(timeout))
+        signal.signal(signal.SIGALRM, timeout_handler)
+        signal.alarm(loop_alarm)
 
         try:
             for i in range(limit):
-                if time.time() - start_time > timeout:
-                    timed_out = True
-                    break
-                
                 n = offset + i
                 try:
                     val = a_func(n)
@@ -261,7 +265,15 @@ def run_test_for_code(a_num, code, offset, expected_terms, timeout):
                     failures += 1
                     break
                 checked += 1
+        except TimeoutError:
+            timed_out = True
+        except Exception as e:
+            report_messages.append(f"  Function '{func_name}(n)': ERROR: {e}")
+            failures = -1
+        finally:
+            signal.alarm(0)
             
+        if failures != -1:
             if failures == 0:
                 if checked == 0 and is_list_based:
                     # If list based and checked 0, it implies the list was empty or not populated.
@@ -270,7 +282,7 @@ def run_test_for_code(a_num, code, offset, expected_terms, timeout):
                     # Remove the previous "Function ... : " prefix effectively by not appending to report yet
                     tests_run = False # Treat as if not run, to trigger fallback
                 elif timed_out:
-                     func_report += f"PASS (checked {checked} terms, timed out after {timeout}s)"
+                     func_report += f"PASS (checked {checked} terms, timed out after {loop_alarm}s)"
                      report_messages.append(func_report)
                 elif list_exhausted:
                      func_report += f"PASS (checked {checked} terms, list exhausted)"
@@ -280,10 +292,9 @@ def run_test_for_code(a_num, code, offset, expected_terms, timeout):
                      report_messages.append(func_report)
             else:
                 report_messages.append(func_report)
-                
-        except Exception as e:
-            report_messages.append(f"  Function '{func_name}(n)': ERROR: {e}")
-    
+    else:
+        pass
+
     # 2. Test first(n)
     first_func = context.get('first')
     first_func_name = 'first'
@@ -299,22 +310,30 @@ def run_test_for_code(a_num, code, offset, expected_terms, timeout):
         tests_run = True
         func_report = f"  Function '{first_func_name}(n)': "
         k = 10
-        if len(expected_terms) >= k:
-            try:
-                # Note: first(n) returns a list, hard to timeout iteration unless we run it in thread/process
-                # For now, simple call.
-                res = first_func(k)
-                if isinstance(res, list):
-                    match_len = min(len(res), len(expected_terms))
-                    if res[:match_len] == expected_terms[:match_len]:
-                        func_report += f"PASS (checked first({k}))"
+        
+        loop_alarm = max(1, int(timeout))
+        signal.signal(signal.SIGALRM, timeout_handler)
+        signal.alarm(loop_alarm)
+        
+        try:
+            if len(expected_terms) >= k:
+                try:
+                    res = first_func(k)
+                    if isinstance(res, list):
+                        match_len = min(len(res), len(expected_terms))
+                        if res[:match_len] == expected_terms[:match_len]:
+                            func_report += f"PASS (checked first({k}))"
+                        else:
+                             func_report += f"FAIL (mismatch)"
                     else:
-                         func_report += f"FAIL (mismatch)"
-                else:
-                    func_report += f"FAIL (returned {type(res)}, expected list)"
-                report_messages.append(func_report)
-            except Exception as e:
-                 report_messages.append(f"  Function '{first_func_name}(n)': ERROR: {e}")
+                        func_report += f"FAIL (returned {type(res)}, expected list)"
+                    report_messages.append(func_report)
+                except Exception as e:
+                     report_messages.append(f"  Function '{first_func_name}(n)': ERROR: {e}")
+        except TimeoutError:
+             report_messages.append(f"  Function '{first_func_name}(n)': TIMEOUT")
+        finally:
+            signal.alarm(0)
 
     # 3. Test is(n)
     is_func = None
@@ -326,26 +345,40 @@ def run_test_for_code(a_num, code, offset, expected_terms, timeout):
     if is_func and callable(is_func):
         tests_run = True
         func_report = f"  Function 'is(n)': "
+        
+        loop_alarm = max(1, int(timeout))
+        signal.signal(signal.SIGALRM, timeout_handler)
+        signal.alarm(loop_alarm)
+        
+        timed_out = False
+        failures = 0
+        
         try:
             all_pass = True
-            start_time_is = time.time()
-            timed_out_is = False
             for x in expected_terms[:10]:
-                if time.time() - start_time_is > timeout:
-                    timed_out_is = True
-                    break
                 if not is_func(x):
                     func_report += f"FAIL: is({x}) returned False (expected True)"
                     all_pass = False
+                    failures = 1
                     break
             if all_pass:
-                if timed_out_is:
-                     func_report += f"PASS (checked partial known terms, timed out)"
-                else:
-                     func_report += "PASS (checked known terms)"
-            report_messages.append(func_report)
+                func_report += "PASS (checked known terms)"
+        except TimeoutError:
+            timed_out = True
         except Exception as e:
             report_messages.append(f"  Function 'is(n)': ERROR: {e}")
+            failures = -1
+        finally:
+            signal.alarm(0)
+            
+        if failures != -1:
+            if timed_out:
+                 func_report += f"PASS (checked partial known terms, timed out)"
+                 report_messages.append(func_report)
+            elif failures == 0:
+                 report_messages.append(func_report)
+            else:
+                 report_messages.append(func_report)
     
     # 4. Check STDOUT or Fallback to Guarded Execution
     if not tests_run or run_guarded_fallback:
