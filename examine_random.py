@@ -31,5 +31,7 @@ def main():
     except Exception as e:
         print(f"Error running examine_sequence.py: {e}")
 
+    print(f"To re-examine this sequence:\nuv run examine_sequence.py {choice}")
+
 if __name__ == "__main__":
     main()

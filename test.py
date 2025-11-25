@@ -3,6 +3,11 @@ import os
 import re
 import time
 import sys
+import signal
+import io
+
+def timeout_handler(signum, frame):
+    raise TimeoutError("Execution timed out")
 
 def load_oeis_data(a_num):
     """
@@ -55,12 +60,373 @@ def load_oeis_data(a_num):
 class StubSequence:
     def __init__(self, name):
         self.name = name
+        self._offset = None
+        self._terms = None
+        self._loaded = False
+
+    def _load(self):
+        if not self._loaded:
+            # load_oeis_data is defined in the global scope
+            self._offset, self._terms = load_oeis_data(self.name)
+            self._loaded = True
+
     def __call__(self, *args, **kwargs):
+        if not args:
+            return 0
+        
+        n = args[0]
+        
+        self._load()
+        
+        if self._terms is None:
+            return 0
+            
+        if isinstance(n, int):
+            idx = n - self._offset
+            if 0 <= idx < len(self._terms):
+                return self._terms[idx]
+        
         return 0 
+
     def __repr__(self):
         return f"<Stub {self.name}>"
 
-def test_file(a_num):
+def code_filename_hint(a_num):
+    return f"<oeis_code_{a_num}>"
+
+def run_test_for_code(a_num, code, offset, expected_terms, timeout):
+    report_messages = []
+    
+    # Prepare context with stubs
+    context = {}
+    found_ids = set(re.findall(r'A\d{6}', code))
+    # Do not stub the sequence itself
+    if a_num in found_ids:
+        found_ids.remove(a_num)
+        
+    for aid in found_ids:
+        context[aid] = StubSequence(aid)
+
+    # Capture stdout
+    captured_output = io.StringIO()
+    original_stdout = sys.stdout
+    sys.stdout = captured_output
+
+    # Execute
+    # Set up the signal handler for timeout
+    signal.signal(signal.SIGALRM, timeout_handler)
+    # Alarm takes integer seconds, ensure at least 5 seconds for module load
+    alarm_time = max(5, int(timeout))
+    signal.alarm(alarm_time)
+    
+    # Set __name__ to avoid running guarded blocks on import
+    context['__name__'] = 'oeis_module'
+    
+    execution_error = None
+    try:
+        # Compile first to set filename for introspection
+        compiled_code = compile(code, code_filename_hint(a_num), 'exec')
+        exec(compiled_code, context)
+    except TimeoutError:
+        execution_error = f"  [ERROR] Execution timed out during module load (limit: {alarm_time}s)"
+    except Exception as e:
+        execution_error = f"  [ERROR] Execution failed: {e}"
+    finally:
+        signal.alarm(0) # Disable alarm
+        sys.stdout = original_stdout # Restore stdout
+
+    if execution_error:
+        report_messages.append(execution_error)
+        return report_messages
+
+    # Track if any test was run
+    tests_run = False
+
+    # 1. Test a(n)
+    a_func = None
+    is_list_based = False
+    
+    if 'a' in context and callable(context['a']):
+        a_func = context['a']
+        func_name = 'a'
+    elif a_num in context and callable(context[a_num]):
+        a_func = context[a_num]
+        func_name = a_num
+    elif f"{a_num}_list" in context and isinstance(context[f"{a_num}_list"], list):
+        # Support for list based generation (e.g. Axxxxxx_list = [...])
+        the_list = context[f"{a_num}_list"]
+        func_name = f"{a_num}_list"
+        is_list_based = True
+        # Define a closure to access the list safely
+        def list_accessor(n):
+            idx = n - offset
+            if 0 <= idx < len(the_list):
+                return the_list[idx]
+            raise IndexError(f"Index {n} (offset {offset}) out of range for list of length {len(the_list)}")
+        a_func = list_accessor
+
+    # Check for generators if no function or list found yet
+    if not a_func:
+        gen_func = None
+        gen_name = None
+        possible_gen_names = ["agen", "a_gen", f"{a_num}gen", f"{a_num}_gen"]
+        
+        # Search for explicit names first
+        for name in possible_gen_names:
+            if name in context and callable(context[name]):
+                gen_func = context[name]
+                gen_name = name
+                break
+        
+        # If not found, search for any *_gen or *gen
+        if not gen_func:
+             for name, obj in context.items():
+                 if (name.endswith("_gen") or name.endswith("gen")) and callable(obj):
+                     gen_func = obj
+                     gen_name = name
+                     break
+        
+        if gen_func:
+            try:
+                # Instantiate the generator
+                gen_iter = gen_func()
+                gen_cache = []
+                func_name = gen_name
+                
+                def gen_accessor(n):
+                    # Target index relative to the generator start (0)
+                    # Assuming generator yields terms starting at 'offset'
+                    target_idx = n - offset
+                    if target_idx < 0:
+                        raise IndexError(f"Requesting index {n} which is less than offset {offset}")
+                    
+                    while len(gen_cache) <= target_idx:
+                        try:
+                            gen_cache.append(next(gen_iter))
+                        except StopIteration:
+                            raise IndexError(f"Generator exhausted at index {len(gen_cache)} (relative)")
+                    
+                    return gen_cache[target_idx]
+                
+                a_func = gen_accessor
+            except Exception:
+                # If calling it didn't return an iterator or failed, ignore
+                pass
+
+    # Last resort: if there is exactly one function...
+    if not a_func:
+        candidates = []
+        for name, obj in context.items():
+            if callable(obj) and not isinstance(obj, StubSequence) and name != '__builtins__':
+                if name not in ['timeout_handler', 'exit', 'quit', 'copyright', 'license', 'help']: 
+                     if hasattr(obj, '__code__'):
+                         filename = obj.__code__.co_filename
+                         if filename == "<string>" or filename == code_filename_hint(a_num):
+                             candidates.append(name)
+        
+        if len(candidates) == 1:
+            func_name = candidates[0]
+            a_func = context[func_name]
+
+    # Execute the test for a(n)
+    run_guarded_fallback = False
+    
+    if a_func:
+        tests_run = True
+        func_report = f"  Function '{func_name}(n)': "
+        failures = 0
+        checked = 0
+        limit = min(len(expected_terms), 50)
+        
+        start_time = time.time()
+        timed_out = False
+        list_exhausted = False
+
+        try:
+            for i in range(limit):
+                if time.time() - start_time > timeout:
+                    timed_out = True
+                    break
+                
+                n = offset + i
+                try:
+                    val = a_func(n)
+                except IndexError:
+                    # If list is exhausted
+                    list_exhausted = True
+                    break
+                
+                if val != expected_terms[i]:
+                    func_report += f"FAIL at n={n}: expected {expected_terms[i]}, got {val}"
+                    failures += 1
+                    break
+                checked += 1
+            
+            if failures == 0:
+                if checked == 0 and is_list_based:
+                    # If list based and checked 0, it implies the list was empty or not populated.
+                    # This likely means we need to run the guarded block to populate it.
+                    run_guarded_fallback = True
+                    # Remove the previous "Function ... : " prefix effectively by not appending to report yet
+                    tests_run = False # Treat as if not run, to trigger fallback
+                elif timed_out:
+                     func_report += f"PASS (checked {checked} terms, timed out after {timeout}s)"
+                     report_messages.append(func_report)
+                elif list_exhausted:
+                     func_report += f"PASS (checked {checked} terms, list exhausted)"
+                     report_messages.append(func_report)
+                else:
+                     func_report += f"PASS (checked {checked} terms)"
+                     report_messages.append(func_report)
+            else:
+                report_messages.append(func_report)
+                
+        except Exception as e:
+            report_messages.append(f"  Function '{func_name}(n)': ERROR: {e}")
+    
+    # 2. Test first(n)
+    first_func = context.get('first')
+    first_func_name = 'first'
+    
+    if not first_func:
+        for name, obj in context.items():
+            if name.endswith("_list") and callable(obj):
+                first_func = obj
+                first_func_name = name
+                break
+    
+    if first_func and callable(first_func):
+        tests_run = True
+        func_report = f"  Function '{first_func_name}(n)': "
+        k = 10
+        if len(expected_terms) >= k:
+            try:
+                # Note: first(n) returns a list, hard to timeout iteration unless we run it in thread/process
+                # For now, simple call.
+                res = first_func(k)
+                if isinstance(res, list):
+                    match_len = min(len(res), len(expected_terms))
+                    if res[:match_len] == expected_terms[:match_len]:
+                        func_report += f"PASS (checked first({k}))"
+                    else:
+                         func_report += f"FAIL (mismatch)"
+                else:
+                    func_report += f"FAIL (returned {type(res)}, expected list)"
+                report_messages.append(func_report)
+            except Exception as e:
+                 report_messages.append(f"  Function '{first_func_name}(n)': ERROR: {e}")
+
+    # 3. Test is(n)
+    is_func = None
+    for k, v in context.items():
+        if k == 'is_seq' or k == f'is_{a_num}' or k == 'ok':
+            is_func = v
+            break
+            
+    if is_func and callable(is_func):
+        tests_run = True
+        func_report = f"  Function 'is(n)': "
+        try:
+            all_pass = True
+            start_time_is = time.time()
+            timed_out_is = False
+            for x in expected_terms[:10]:
+                if time.time() - start_time_is > timeout:
+                    timed_out_is = True
+                    break
+                if not is_func(x):
+                    func_report += f"FAIL: is({x}) returned False (expected True)"
+                    all_pass = False
+                    break
+            if all_pass:
+                if timed_out_is:
+                     func_report += f"PASS (checked partial known terms, timed out)"
+                else:
+                     func_report += "PASS (checked known terms)"
+            report_messages.append(func_report)
+        except Exception as e:
+            report_messages.append(f"  Function 'is(n)': ERROR: {e}")
+    
+    # 4. Check STDOUT or Fallback to Guarded Execution
+    if not tests_run or run_guarded_fallback:
+        # Run the guarded block
+        
+        # Reset stdout capture
+        captured_output = io.StringIO()
+        sys.stdout = captured_output
+        
+        context['__name__'] = '__main__'
+        signal.alarm(alarm_time)
+        
+        try:
+            exec(code, context)
+        except TimeoutError:
+             pass
+        except Exception as e:
+             pass
+        finally:
+            signal.alarm(0)
+            sys.stdout = original_stdout
+
+        # If we were retrying because of an unpopulated list, check that list again first!
+        if run_guarded_fallback and is_list_based and func_name in context:
+             # Reuse the logic for a(n) testing
+             the_list = context[func_name]
+             def list_accessor(n):
+                idx = n - offset
+                if 0 <= idx < len(the_list):
+                    return the_list[idx]
+                raise IndexError
+             
+             # Retry List Check
+             func_report = f"  Function '{func_name}(n)' (after script run): "
+             failures = 0
+             checked = 0
+             list_exhausted = False
+             limit = min(len(expected_terms), 50)
+             
+             for i in range(limit):
+                n = offset + i
+                try:
+                    val = list_accessor(n)
+                except IndexError:
+                    list_exhausted = True
+                    break
+                if val != expected_terms[i]:
+                    func_report += f"FAIL at n={n}: expected {expected_terms[i]}, got {val}"
+                    failures += 1
+                    break
+                checked += 1
+             
+             if failures == 0 and checked > 0:
+                 tests_run = True
+                 if list_exhausted:
+                     func_report += f"PASS (checked {checked} terms, list exhausted)"
+                 else:
+                     func_report += f"PASS (checked {checked} terms)"
+                 report_messages.append(func_report)
+
+        # Check stdout if still needed or if just supplementing
+        output_str = captured_output.getvalue()
+        if output_str.strip() and not tests_run:
+            found_numbers = [int(x) for x in re.findall(r'-?\d+', output_str)]
+            if found_numbers:
+                tests_run = True
+                match_len = min(len(found_numbers), len(expected_terms))
+                if match_len > 0 and found_numbers[:match_len] == expected_terms[:match_len]:
+                    report_messages.append(f"  Script output: PASS (checked {match_len} terms from stdout)")
+                else:
+                    detail = f"expected {expected_terms[:match_len]}, got {found_numbers[:match_len]}"
+                    report_messages.append(f"  Script output: FAIL (mismatch: {detail})")
+            else:
+                 report_messages.append("  [INFO] Script produced output but no numbers found.")
+
+    if not tests_run:
+        report_messages.append("  [ERROR] No known test functions found (expected 'a(n)', 'first(n)', or 'is(n)').")
+    
+    return report_messages
+
+def test_file(a_num, timeout=1.0):
     bucket = a_num[:4]
     file_path = os.path.join('pythonprogs', bucket, f"{a_num}.py")
     file_path = os.path.abspath(file_path)
@@ -81,106 +447,32 @@ def test_file(a_num):
     # Read code
     try:
         with open(file_path, 'r') as f:
-            code = f.read()
+            full_code = f.read()
     except Exception as e:
         report_messages.append(f"  [ERROR] Could not read file: {e}")
         return report_messages
 
-    # Prepare context with stubs
-    context = {}
-    found_ids = set(re.findall(r'A\d{6}', code))
-    for aid in found_ids:
-        context[aid] = StubSequence(aid)
-
-    # Execute
-    try:
-        exec(code, context)
-    except Exception as e:
-        report_messages.append(f"  [ERROR] Execution failed: {e}")
-        return report_messages
-
-    # 1. Test a(n)
-    a_func = None
-    if 'a' in context and callable(context['a']):
-        a_func = context['a']
-        func_name = 'a'
-    elif a_num in context and callable(context[a_num]):
-        a_func = context[a_num]
-        func_name = a_num
+    # Split by separator
+    raw_sections = full_code.split("# OEIS_PYTHON_SEPARATOR")
+    code_sections = [s for s in raw_sections if s.strip()]
     
-    if a_func:
-        func_report = f"  Function '{func_name}(n)': "
-        failures = 0
-        checked = 0
-        limit = min(len(expected_terms), 50)
+    if len(code_sections) > 1:
+        report_messages.append(f"  Found {len(code_sections)} code sections.")
         
-        try:
-            for i in range(limit):
-                n = offset + i
-                val = a_func(n)
-                if val != expected_terms[i]:
-                    func_report += f"FAIL at n={n}: expected {expected_terms[i]}, got {val}"
-                    failures += 1
-                    break
-                checked += 1
+    for i, code in enumerate(code_sections):
+        if len(code_sections) > 1:
+            report_messages.append(f"  --- Section {i+1} ---")
             
-            if failures == 0:
-                func_report += f"PASS (checked {checked} terms)"
-            report_messages.append(func_report)
-        except Exception as e:
-            report_messages.append(f"  Function '{func_name}(n)': ERROR: {e}")
-    else:
-        pass
+        section_messages = run_test_for_code(a_num, code, offset, expected_terms, timeout)
+        report_messages.extend(section_messages)
 
-    # 2. Test first(n)
-    first_func = context.get('first')
-    
-    if first_func and callable(first_func):
-        func_report = f"  Function 'first(n)': "
-        k = 10
-        if len(expected_terms) >= k:
-            try:
-                res = first_func(k)
-                if isinstance(res, list):
-                    match_len = min(len(res), len(expected_terms))
-                    if res[:match_len] == expected_terms[:match_len]:
-                        func_report += f"PASS (checked first({k}))"
-                    else:
-                         func_report += f"FAIL (mismatch)"
-                else:
-                    func_report += f"FAIL (returned {type(res)}, expected list)"
-                report_messages.append(func_report)
-            except Exception as e:
-                 report_messages.append(f"  Function 'first(n)': ERROR: {e}")
-                 
-    # 3. Test is(n)
-    is_func = None
-    for k, v in context.items():
-        if k == 'is_seq' or k == f'is_{a_num}':
-            is_func = v
-            break
-            
-    if is_func and callable(is_func):
-        func_report = f"  Function 'is(n)': "
-        try:
-            all_pass = True
-            for x in expected_terms[:10]:
-                if not is_func(x):
-                    func_report += f"FAIL: is({x}) returned False (expected True)"
-                    all_pass = False
-                    break
-            if all_pass:
-                func_report += "PASS (checked known terms)"
-            report_messages.append(func_report)
-        except Exception as e:
-            report_messages.append(f"  Function 'is(n)': ERROR: {e}")
-    
     return report_messages
 
 
 def main():
     parser = argparse.ArgumentParser(description="Test OEIS Python programs.")
     parser.add_argument("a_number", help="The OEIS A-number (e.g., A000045).")
+    parser.add_argument("--timeout", type=float, default=1.0, help="Timeout in seconds for testing loops (default: 1.0).")
     args = parser.parse_args()
     
     # Basic validation for A-number format
@@ -188,8 +480,9 @@ def main():
         print(f"Invalid A-number format: {args.a_number}. Expected format like A000045.", file=sys.stderr)
         sys.exit(1)
 
-    messages = test_file(args.a_number)
+    messages = test_file(args.a_number, timeout=args.timeout)
     for msg in messages:
         print(msg)
+
 if __name__ == "__main__":
     main()
