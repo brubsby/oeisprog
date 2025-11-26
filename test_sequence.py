@@ -6,6 +6,7 @@ import sys
 import signal
 import io
 import ast
+import inspect
 
 def timeout_handler(signum, frame):
     raise TimeoutError("Execution timed out")
@@ -92,6 +93,15 @@ class StubSequence:
     def __repr__(self):
         return f"<Stub {self.name}>"
 
+def compare_lists(expected, got):
+    min_len = min(len(expected), len(got))
+    for i in range(min_len):
+        if expected[i] != got[i]:
+            return f"mismatch at index {i}: expected {expected[i]}, got {got[i]}"
+    if len(expected) != len(got):
+        return f"length mismatch: expected {len(expected)}, got {len(got)}"
+    return "match"
+
 def code_filename_hint(a_num):
     return f"<oeis_code_{a_num}>"
 
@@ -148,14 +158,41 @@ def run_test_for_code(a_num, code, offset, expected_terms, timeout):
 
     # 1. Test a(n)
     a_func = None
+    gen_func = None
+    gen_name = None
     is_list_based = False
     
     if 'a' in context and callable(context['a']):
-        a_func = context['a']
-        func_name = 'a'
+        candidate = context['a']
+        try:
+            sig = inspect.signature(candidate)
+            if len(sig.parameters) == 0:
+                # 0 args: likely a generator factory
+                gen_func = candidate
+                gen_name = 'a'
+            else:
+                a_func = candidate
+                func_name = 'a'
+        except ValueError:
+             # Built-ins might not have signature
+             a_func = candidate
+             func_name = 'a'
+             
     elif a_num in context and callable(context[a_num]):
-        a_func = context[a_num]
-        func_name = a_num
+        candidate = context[a_num]
+        try:
+            sig = inspect.signature(candidate)
+            if len(sig.parameters) == 0:
+                 # 0 args: likely a generator factory
+                gen_func = candidate
+                gen_name = a_num
+            else:
+                a_func = candidate
+                func_name = a_num
+        except ValueError:
+             a_func = candidate
+             func_name = a_num
+             
     elif f"{a_num}_list" in context and isinstance(context[f"{a_num}_list"], list):
         # Support for list based generation (e.g. Axxxxxx_list = [...])
         the_list = context[f"{a_num}_list"]
@@ -201,24 +238,23 @@ def run_test_for_code(a_num, code, offset, expected_terms, timeout):
 
     # Check for generators if no function or list found yet
     if not a_func:
-        gen_func = None
-        gen_name = None
-        possible_gen_names = ["agen", "a_gen", f"{a_num}gen", f"{a_num}_gen"]
-        
-        # Search for explicit names first
-        for name in possible_gen_names:
-            if name in context and callable(context[name]):
-                gen_func = context[name]
-                gen_name = name
-                break
-        
-        # If not found, search for any *_gen or *gen
         if not gen_func:
-             for name, obj in context.items():
-                 if (name.endswith("_gen") or name.endswith("gen")) and callable(obj):
-                     gen_func = obj
-                     gen_name = name
-                     break
+            possible_gen_names = ["agen", "a_gen", f"{a_num}gen", f"{a_num}_gen"]
+            
+            # Search for explicit names first
+            for name in possible_gen_names:
+                if name in context and callable(context[name]):
+                    gen_func = context[name]
+                    gen_name = name
+                    break
+            
+            # If not found, search for any *_gen or *gen
+            if not gen_func:
+                 for name, obj in context.items():
+                     if (name.endswith("_gen") or name.endswith("gen")) and callable(obj):
+                         gen_func = obj
+                         gen_name = name
+                         break
         
         if gen_func:
             try:
@@ -392,7 +428,8 @@ def run_test_for_code(a_num, code, offset, expected_terms, timeout):
                         if res[:match_len] == expected_terms[:match_len]:
                             func_report += f"PASS (checked first({k}))"
                         else:
-                             func_report += f"FAIL (mismatch)"
+                             detail = compare_lists(expected_terms[:match_len], res[:match_len])
+                             func_report += f"FAIL ({detail})"
                     else:
                         func_report += f"FAIL (returned {type(res)}, expected list)"
                     report_messages.append(func_report)
@@ -407,8 +444,22 @@ def run_test_for_code(a_num, code, offset, expected_terms, timeout):
     is_func = None
     for k, v in context.items():
         if k == 'is_seq' or k == f'is_{a_num}' or k == 'ok':
-            is_func = v
-            break
+            if callable(v):
+                try:
+                    sig = inspect.signature(v)
+                    # Count required arguments
+                    required_args = 0
+                    for p in sig.parameters.values():
+                        if p.default == inspect.Parameter.empty and p.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD):
+                            required_args += 1
+                    
+                    if required_args == 1:
+                        is_func = v
+                        break
+                except (ValueError, TypeError):
+                    # If we can't inspect signature (e.g. built-in), optimistically assume it's valid if named explicitly
+                    is_func = v
+                    break
             
     if is_func and callable(is_func):
         tests_run = True
@@ -534,8 +585,8 @@ def run_test_for_code(a_num, code, offset, expected_terms, timeout):
                 if match_len > 0 and res[:match_len] == expected_terms[:match_len]:
                     report_messages.append(f"  Script result: PASS (checked {match_len} terms from main block)")
                 else:
-                    detail = f"expected {expected_terms[:match_len]}, got {res[:match_len]}"
-                    report_messages.append(f"  Script result: FAIL (mismatch: {detail})")
+                    detail = compare_lists(expected_terms[:match_len], res[:match_len])
+                    report_messages.append(f"  Script result: FAIL ({detail})")
 
         # If we were retrying because of an unpopulated list, check that list again first!
         if not tests_run and run_guarded_fallback and is_list_based and func_name in context:
@@ -585,8 +636,8 @@ def run_test_for_code(a_num, code, offset, expected_terms, timeout):
                 if match_len > 0 and found_numbers[:match_len] == expected_terms[:match_len]:
                     report_messages.append(f"  Script output: PASS (checked {match_len} terms from stdout)")
                 else:
-                    detail = f"expected {expected_terms[:match_len]}, got {found_numbers[:match_len]}"
-                    report_messages.append(f"  Script output: FAIL (mismatch: {detail})")
+                    detail = compare_lists(expected_terms[:match_len], found_numbers[:match_len])
+                    report_messages.append(f"  Script output: FAIL ({detail})")
             else:
                  report_messages.append("  [INFO] Script produced output but no numbers found.")
 

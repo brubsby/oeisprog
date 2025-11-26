@@ -7,7 +7,8 @@ This document outlines the environment, tools, and conventions for the `oeisprog
 *   **`pythonprogs/`**: The main repository of Python scripts. Organized into buckets of 1000 (e.g., `A000/`, `A001/`).
     *   File path format: `pythonprogs/Axxx/Axxxxxx.py`.
 *   **`../oeisdata/seq/`**: (External) Raw OEIS data files (`.seq`) containing terms, offsets, and other metadata.
-*   **`test.py`**: The core testing framework. It loads the code, mocks `load_oeis_data`, and attempts to verify `a(n)`, `first(n)`, or `is(n)` against known terms.
+*   **`test_sequence.py`**: The core testing framework. It loads the code, mocks `load_oeis_data`, and attempts to verify `a(n)`, `first(n)`, or `is(n)` against known terms.
+*   **`regression_tests.py`**: Runs a suite of tests against key sequences to prevent regressions in the testing and extraction tools.
 *   **`examine_sequence.py`**: The primary entry point for developers. It combines data fetching, code display, and testing into a single report.
 *   **`extract_python_oeis.py`**: Utility to scrape/update Python code from raw OEIS data files.
 
@@ -18,11 +19,11 @@ This document outlines the environment, tools, and conventions for the `oeisprog
 **Purpose:**
 1.  Fetches OEIS data (terms, name, offsets).
 2.  Displays the extracted Python code from `pythonprogs/`.
-3.  Runs `test.py` against the code.
+3.  Runs `test_sequence.py` against the code.
 4.  Provides a link to the OEIS page.
 
-### `test.py`
-**Usage:** `uv run test.py Axxxxxx`
+### `test_sequence.py`
+**Usage:** `uv run test_sequence.py Axxxxxx`
 **Logic:**
 *   **Stubbing:** Mocks `Axxxxxx` references in the code to prevent infinite recursion or dependency issues (unless defined locally).
 *   **Heuristics:** auto-detects function types:
@@ -32,9 +33,19 @@ This document outlines the environment, tools, and conventions for the `oeisprog
     *   **List Generators**: If a function returns a list, it is treated as `first(n)`.
 *   **Guard Blocks:** Executes code within `if __name__ == '__main__':` as a fallback if no functions are callable.
 
+### `regression_tests.py`
+**Usage:** `uv run regression_tests.py`
+**Purpose:**
+*   Verifies `extract_python_oeis.py` correctly extracts and formats code (including stdout printing).
+*   Runs `test_sequence.py` against a set of "known good" sequences (e.g., `A000045`, `A320890`) to ensure test logic remains sound.
+
+**Action:**
+*   **Add Sequences:** Whenever you fix a sequence and verify it passes all tests, add its A-number to the `sequences` list in `regression_tests.py`.
+*   **Run Tests:** Always run `uv run regression_tests.py` after making changes to `test_sequence.py` or `extract_python_oeis.py`.
+
 ## 3. Coding Conventions
 
-When writing or fixing scripts, adhere to these naming conventions to ensure `test.py` can verify them automatically.
+When writing or fixing scripts, adhere to these naming conventions to ensure `test_sequence.py` can verify them automatically.
 
 *   **`a(n)`**: Computes the **n-th term** (respecting the sequence offset).
     *   *Preferred* for simple sequences.
@@ -44,17 +55,17 @@ When writing or fixing scripts, adhere to these naming conventions to ensure `te
 *   **`Axxxxxx_list`**: A list variable containing known terms (supported by the tester).
 
 ### Indexing & Offsets
-*   **OEIS implies 1-based indexing** for `a(n)` in its descriptions usually, but `test.py` passes the actual index `n`.
+*   **OEIS implies 1-based indexing** for `a(n)` in its descriptions usually, but `test_sequence.py` passes the actual index `n`.
 *   **Critical:** Ensure your function handles the **OEIS Offset**.
     *   If the sequence starts at `n=1`, `a(1)` should return the first term.
     *   If `n=0`, `a(0)` should return the first term.
-    *   The `test.py` framework extracts the offset from the `.seq` file (`%O`) and aligns tests accordingly.
+    *   The `test_sequence.py` framework extracts the offset from the `.seq` file (`%O`) and aligns tests accordingly.
 
 ## 4. Common Issues & Fixes
 
 ### "Expected Integer, Got List"
 *   **Cause:** The tester found a function (often named `Axxxxxx`) and tried to use it as `a(n)`, but it returned the whole sequence.
-*   **Fix:** Rename the function to `Axxxxxx_list` or `first`, or ensure the "Last Resort" logic in `test.py` probes it correctly (already patched, but keep in mind).
+*   **Fix:** Rename the function to `Axxxxxx_list` or `first`, or ensure the "Last Resort" logic in `test_sequence.py` probes it correctly (already patched, but keep in mind).
 *   **Fix (Code side):** Change the return to `sequence[n]` if it was meant to be `a(n)`.
 
 ### Offset Mismatches
@@ -77,3 +88,4 @@ When writing or fixing scripts, adhere to these naming conventions to ensure `te
     *   *Tip:* Use `replace` tool for targeted fixes.
     *   *Tip:* Rename functions to match conventions (`a`, `first`).
 4.  Re-run `examine_sequence.py` to verify.
+5.  If confirmed passing, add `Axxxxxx` to the `AWAITING_FIX` list `regression_tests.py`, as your fix will be overwritten by the extraction process in the regression test.

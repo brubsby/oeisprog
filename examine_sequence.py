@@ -44,13 +44,21 @@ def main():
         print(f"Extracted file not found at {file_path}")
 
     # 3. Run Test
-    print(f"\n>>> Test Results (via test.py {choice})")
+    print(f"\n>>> Test Results (via test_sequence.py {args.a_number})")
     print("-" * 60)
-    sys.stdout.flush()
+    
+    # Use 'uv run' to execute the test script in the environment
     try:
-        subprocess.run([sys.executable, 'test.py', choice], check=False)
+        test_proc = subprocess.run(
+            ['uv', 'run', 'test_sequence.py', args.a_number],
+            capture_output=True,
+            text=True
+        )
+        print(test_proc.stdout)
+        if test_proc.stderr:
+            print(test_proc.stderr)
     except Exception as e:
-        print(f"Error running test.py: {e}")
+        print(f"Error running test_sequence.py: {e}")
     
     print("-" * 60)
     print(f"URL: https://oeis.org/{choice}")
