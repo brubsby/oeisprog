@@ -52,6 +52,8 @@ def main():
     except Exception as e:
         print(f"Error running test.py: {e}")
     
+    print("-" * 60)
+    print(f"URL: https://oeis.org/{choice}")
     print("\n" + "=" * 60)
 
 if __name__ == "__main__":

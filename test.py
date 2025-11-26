@@ -5,6 +5,7 @@ import time
 import sys
 import signal
 import io
+import ast
 
 def timeout_handler(signum, frame):
     raise TimeoutError("Execution timed out")
@@ -141,6 +142,9 @@ def run_test_for_code(a_num, code, offset, expected_terms, timeout):
 
     # Track if any test was run
     tests_run = False
+    
+    first_func = None
+    first_func_name = None
 
     # 1. Test a(n)
     a_func = None
@@ -164,6 +168,36 @@ def run_test_for_code(a_num, code, offset, expected_terms, timeout):
                 return the_list[idx]
             raise IndexError(f"Index {n} (offset {offset}) out of range for list of length {len(the_list)}")
         a_func = list_accessor
+
+    # Check if a_func is actually returning a list (bulk generation)
+    if a_func and not is_list_based:
+        try:
+            # Probe with a safe index
+            probe_idx = offset + 1 if offset >= 0 else 1
+            # Use a small timeout for the probe
+            signal.alarm(max(1, int(timeout)))
+            try:
+                res = a_func(probe_idx)
+            except IndexError:
+                # Index error on probe might mean it expects 0-based or length
+                # Try another probe
+                res = a_func(10) # Arbitrary small length
+            except Exception:
+                res = None
+            finally:
+                signal.alarm(0)
+
+            if isinstance(res, (list, tuple)):
+                # It returns a list, so it's not a(n), it's likely first(n) or list(lim)
+                # If we don't have a first_func yet, use this one
+                if not context.get('first'): 
+                    if 'first' not in context:
+                        first_func = a_func
+                        first_func_name = func_name
+                        a_func = None # Remove from a_func candidate
+        except Exception:
+            # If calling it failed, we can't determine. Let the main loop handle it.
+            pass
 
     # Check for generators if no function or list found yet
     if not a_func:
@@ -226,11 +260,41 @@ def run_test_for_code(a_num, code, offset, expected_terms, timeout):
                      if hasattr(obj, '__code__'):
                          filename = obj.__code__.co_filename
                          if filename == "<string>" or filename == code_filename_hint(a_num):
+                             if first_func and obj == first_func:
+                                 continue
                              candidates.append(name)
         
         if len(candidates) == 1:
-            func_name = candidates[0]
-            a_func = context[func_name]
+            candidate_name = candidates[0]
+            candidate_func = context[candidate_name]
+            
+            # Probe the candidate to see if it returns a list
+            is_list_result = False
+            try:
+                probe_idx = offset + 1 if offset >= 0 else 1
+                signal.alarm(max(1, int(timeout)))
+                try:
+                    res = candidate_func(probe_idx)
+                except IndexError:
+                    res = candidate_func(10)
+                except Exception:
+                    res = None
+                finally:
+                    signal.alarm(0)
+                
+                if isinstance(res, (list, tuple)):
+                    is_list_result = True
+            except Exception:
+                pass
+            
+            if is_list_result:
+                if not first_func:
+                    first_func = candidate_func
+                    first_func_name = candidate_name
+            else:
+                # Only assign to a_func if it didn't look like a list generator
+                func_name = candidate_name
+                a_func = candidate_func
 
     # Execute the test for a(n)
     run_guarded_fallback = False
@@ -275,12 +339,14 @@ def run_test_for_code(a_num, code, offset, expected_terms, timeout):
             
         if failures != -1:
             if failures == 0:
-                if checked == 0 and is_list_based:
-                    # If list based and checked 0, it implies the list was empty or not populated.
-                    # This likely means we need to run the guarded block to populate it.
+                # If list based and checked 0, it implies the list was empty or not populated.
+                # Or if list exhausted prematurely, we might need to run the script to populate it.
+                if is_list_based and (checked == 0 or (list_exhausted and checked < len(expected_terms))):
                     run_guarded_fallback = True
                     # Remove the previous "Function ... : " prefix effectively by not appending to report yet
-                    tests_run = False # Treat as if not run, to trigger fallback
+                    # Only if we haven't actually confirmed enough terms?
+                    # Actually, if we run fallback, we should re-test.
+                    tests_run = False # Treat as if not run, to trigger fallback logic and re-check
                 elif timed_out:
                      func_report += f"PASS (checked {checked} terms, timed out after {loop_alarm}s)"
                      report_messages.append(func_report)
@@ -296,8 +362,10 @@ def run_test_for_code(a_num, code, offset, expected_terms, timeout):
         pass
 
     # 2. Test first(n)
-    first_func = context.get('first')
-    first_func_name = 'first'
+    if not first_func:
+        first_func = context.get('first')
+        if first_func:
+            first_func_name = 'first'
     
     if not first_func:
         for name, obj in context.items():
@@ -309,7 +377,7 @@ def run_test_for_code(a_num, code, offset, expected_terms, timeout):
     if first_func and callable(first_func):
         tests_run = True
         func_report = f"  Function '{first_func_name}(n)': "
-        k = 10
+        k = len(expected_terms)
         
         loop_alarm = max(1, int(timeout))
         signal.signal(signal.SIGALRM, timeout_handler)
@@ -392,17 +460,85 @@ def run_test_for_code(a_num, code, offset, expected_terms, timeout):
         signal.alarm(alarm_time)
         
         try:
-            exec(code, context)
+            # Parse the code and attempt to inject a result capture for the last expression 
+            # in the 'if __name__ == "__main__":' block
+            tree = ast.parse(code)
+            
+            modified = False
+            for node in tree.body:
+                if isinstance(node, ast.If):
+                    # Check for basic "if __name__ == '__main__':" pattern
+                    is_main = False
+                    try:
+                        if (isinstance(node.test, ast.Compare) and 
+                            isinstance(node.test.left, ast.Name) and node.test.left.id == '__name__' and
+                            isinstance(node.test.ops[0], ast.Eq)):
+                            
+                            # Check comparators (handle Constant/Str differences across Py versions)
+                            comp = node.test.comparators[0]
+                            val = None
+                            if isinstance(comp, ast.Constant):
+                                val = comp.value
+                            elif hasattr(ast, 'Str') and isinstance(comp, ast.Str):
+                                val = comp.s
+                                
+                            if val == '__main__':
+                                is_main = True
+                    except Exception:
+                        pass
+                    
+                    if is_main:
+                        if node.body and isinstance(node.body[-1], ast.Expr):
+                            # Replace the last expression with an assignment
+                            # _test_runner_result = <expr>
+                            orig_expr = node.body[-1]
+                            target_node = ast.Name(id='_test_runner_result', ctx=ast.Store())
+                            ast.copy_location(target_node, orig_expr)
+                            
+                            assign = ast.Assign(
+                                targets=[target_node],
+                                value=orig_expr.value
+                            )
+                            # Copy location info to ensure compilation works
+                            ast.copy_location(assign, orig_expr)
+                            node.body[-1] = assign
+                            modified = True
+            
+            if modified:
+                # Compile the modified AST
+                compiled_code = compile(tree, code_filename_hint(a_num), 'exec')
+                exec(compiled_code, context)
+            else:
+                # Fallback if no suitable main block found or modification not needed
+                exec(code, context)
+
         except TimeoutError:
              pass
         except Exception as e:
-             pass
+             # If AST processing fails for some reason, try one last raw exec
+             try:
+                 exec(code, context)
+             except Exception:
+                 pass
         finally:
             signal.alarm(0)
             sys.stdout = original_stdout
 
+        # Check for captured result from AST modification
+        if '_test_runner_result' in context:
+            res = context['_test_runner_result']
+            if isinstance(res, list):
+                # Validate the list
+                tests_run = True
+                match_len = min(len(res), len(expected_terms))
+                if match_len > 0 and res[:match_len] == expected_terms[:match_len]:
+                    report_messages.append(f"  Script result: PASS (checked {match_len} terms from main block)")
+                else:
+                    detail = f"expected {expected_terms[:match_len]}, got {res[:match_len]}"
+                    report_messages.append(f"  Script result: FAIL (mismatch: {detail})")
+
         # If we were retrying because of an unpopulated list, check that list again first!
-        if run_guarded_fallback and is_list_based and func_name in context:
+        if not tests_run and run_guarded_fallback and is_list_based and func_name in context:
              # Reuse the logic for a(n) testing
              the_list = context[func_name]
              def list_accessor(n):

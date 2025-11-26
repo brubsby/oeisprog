@@ -1,80 +1,79 @@
-This page describes my philosophy on programs in the OEIS.
+# OEIS Python Project Context
 
-== Types of programs ==
-What kinds of programs should be added to the OEIS, and how?
+This document outlines the environment, tools, and conventions for the `oeisprog` project. It serves as a guide for maintaining and improving the collection of Python programs for OEIS sequences.
 
-Generally, sequences are improved by adding programs. They can serve many purposes:
-* explaining the sequence unambiguously
-* describing computational 'tricks'
-* computing things directly:
-** isolated terms like a(n)
-** the first n terms
-** all terms up to some limit
-** whether a number is an element of the sequence
-** the successor (predecessor) of a sequence member
+## 1. Directory Structure
 
-I feel that all of these can be useful, though the particular choices will be determined by the specifics of the sequence. Though some of these forms allow others to be defined, I don't think it's generally useful to define these by these relations (but rather only when there is a more efficient technique). Suppose a monotonically increasing sequence of positive integers (with offset 1) has a function <code>is(n)</code> which tests for membership in the sequence. A function giving the n-th term can be defined thus:
-: <code>a(n)=my(k=0); while(n > 0, k=k+1; if(is(k), n=n-1)); return(k)</code>
-<!-- This code is more idiomatic, but the code above is designed to be more easily read by those not familiar with GP.
-: <code>a(n)=my(k); while(n, if(is(k++), n--)); k</code>
--->
-but this gives no additional information beyond that stored in the function <code>is(n)</code>. Other programs can be simulated in like fashion.
+*   **`pythonprogs/`**: The main repository of Python scripts. Organized into buckets of 1000 (e.g., `A000/`, `A001/`).
+    *   File path format: `pythonprogs/Axxx/Axxxxxx.py`.
+*   **`../oeisdata/seq/`**: (External) Raw OEIS data files (`.seq`) containing terms, offsets, and other metadata.
+*   **`test.py`**: The core testing framework. It loads the code, mocks `load_oeis_data`, and attempts to verify `a(n)`, `first(n)`, or `is(n)` against known terms.
+*   **`examine_sequence.py`**: The primary entry point for developers. It combines data fetching, code display, and testing into a single report.
+*   **`extract_python_oeis.py`**: Utility to scrape/update Python code from raw OEIS data files.
 
-== Naming conventions ==
+## 2. Tooling & Usage
 
-I recommend the following conventions for naming programs.
+### `examine_sequence.py`
+**Usage:** `uv run examine_sequence.py Axxxxxx`
+**Purpose:**
+1.  Fetches OEIS data (terms, name, offsets).
+2.  Displays the extracted Python code from `pythonprogs/`.
+3.  Runs `test.py` against the code.
+4.  Provides a link to the OEIS page.
 
-* <code>a(n)</code> for a program which computes the ''n''-th term of the sequence. Offset should be respected.
-* <code>is(n)</code> for a program which tests whether ''n'' is a member of the sequence or not. This generally only makes sense in sequences which represent sets (usually as a strictly increasing sequence). Mathematica programs (only) may instead choose a name of the form <code>PropertyQ[n_]</code> where "Property" is a brief description of the sequence, e.g., Squarefree.
-* <code>list(lim)</code> for a program which lists the terms of the sequence up to ''lim''. This isn't needed when there is already code for <code>is(n)</code> unless the program is more efficient than running <code>is</code> over each number in the range. Like <code>is(n)</code>, this generally only makes sense for set-like sequences.
-* <code>first(n)</code> for a program which lists the initial terms of the sequence up to index ''n''. This isn't needed when there is already code for <code>a(n)</code> unless the program is more efficient than running <code>a</code> over the indices up to ''n''. For example, if computing the ''n''-th term requires finding the first ''n'' terms, you might as well return them with <code>first(n)</code> rather than throw all but the last away to make <code>a(n)</code>.
+### `test.py`
+**Usage:** `uv run test.py Axxxxxx`
+**Logic:**
+*   **Stubbing:** Mocks `Axxxxxx` references in the code to prevent infinite recursion or dependency issues (unless defined locally).
+*   **Heuristics:** auto-detects function types:
+    *   **`a(n)`**: Computes the n-th term.
+    *   **`first(n)`**: Returns a list of the first n terms.
+    *   **`is(n)`**: Returns boolean (membership check).
+    *   **List Generators**: If a function returns a list, it is treated as `first(n)`.
+*   **Guard Blocks:** Executes code within `if __name__ == '__main__':` as a fallback if no functions are callable.
 
-Sometimes the above are not practical. Here are more specialized or last-ditch types.
-* <code>row(n)</code> for a program which returns an array corresponding to the ''n''-th row of the sequence. This should only be used for {{OEIS|keyword:tabl|tabl}} or {{OEIS|keyword:tabf|tabf}} sequences.
-* <code>do(x)</code> for a program which lists the initial terms of the sequence. Larger values of ''x'' should not decrease the number of terms returned, and there should be some ''x'' which will generate the first ''n'' terms for any ''n''. (This is useful when there is no obvious way to write <code>first(n)</code> or <code>list(lim)</code>, or if this would cause needless inefficiency.)
-* <code>step(k)</code> for a program which returns a(n+1) when given a(n).
-* <code>step(k,n)</code> for a program which returns a(n+1) when given a(n) and n.
-* <code>has(n)</code> for a program which checks if n has a property required for n to be in the sequence. If n is in the sequence, <code>has(n)</code> must return <code>true</code> (however this is represented in the language); otherwise it may return <code>true</code> or <code>false</code>. Since this does not specify the sequence it should only be used as part of a larger collection of functions.
+## 3. Coding Conventions
 
-== Comments ==
-Generally, programs in the OEIS do not need comments beyond marking authorship. Substantial comments should be written elsewhere: in the comments section, the formula section, etc. Occasionally there are relevant points to be raised about a program but which do not make sense in the broader context of the sequence; in that case comments are appropriate.
+When writing or fixing scripts, adhere to these naming conventions to ensure `test.py` can verify them automatically.
 
-== Input validation ==
-Scripts in the OEIS should generally be brief. Input validation is not required: if a term outside the domain is requested, the result is undefined behavior.
+*   **`a(n)`**: Computes the **n-th term** (respecting the sequence offset).
+    *   *Preferred* for simple sequences.
+*   **`first(n)`** or **`list(n)`**: Returns a list of the **first n terms**.
+    *   *Preferred* for sequences where computing `a(n)` requires previous terms (e.g., recursive sequences).
+*   **`is(n)`** or **`is_seq(n)`**: Returns `True`/`False` if `n` is in the sequence.
+*   **`Axxxxxx_list`**: A list variable containing known terms (supported by the tester).
 
-In particular, scripts like
+### Indexing & Offsets
+*   **OEIS implies 1-based indexing** for `a(n)` in its descriptions usually, but `test.py` passes the actual index `n`.
+*   **Critical:** Ensure your function handles the **OEIS Offset**.
+    *   If the sequence starts at `n=1`, `a(1)` should return the first term.
+    *   If `n=0`, `a(0)` should return the first term.
+    *   The `test.py` framework extracts the offset from the `.seq` file (`%O`) and aligns tests accordingly.
 
-: <code>a(n)=if(n<0, return(0)); n^2</code>
+## 4. Common Issues & Fixes
 
-are not recommended (assuming the offset is 0, in this case); instead write
+### "Expected Integer, Got List"
+*   **Cause:** The tester found a function (often named `Axxxxxx`) and tried to use it as `a(n)`, but it returned the whole sequence.
+*   **Fix:** Rename the function to `Axxxxxx_list` or `first`, or ensure the "Last Resort" logic in `test.py` probes it correctly (already patched, but keep in mind).
+*   **Fix (Code side):** Change the return to `sequence[n]` if it was meant to be `a(n)`.
 
-: <code>a(n)=n^2</code>
+### Offset Mismatches
+*   **Cause:** OEIS data expects terms starting at index `1`, but Python list is 0-indexed, or the script generates an implicit `a(0)` term.
+*   **Fix:** Adjust the return slice (e.g., `return sequence[1:]`) or the loop range to match the expected terms.
 
-Communicating succinctly is more important than handling erroneous input, and in any case returning 0 is not useful. In fact, there is often a useful interpretation of the values of a sequence before its offset, and this script gives the natural extension. (See also [[Doubly infinite sequences]] and [[Index to OEIS: Section Tu #2wis|its Index entry]].)
+### Infinite Recursion / Timeout
+*   **Cause:** `a(n)` calls `a(n-1)` without a base case, or calls the global `Axxxxxx` stub instead of the local function.
+*   **Fix:** Ensure internal recursion calls the *defined function name*, not the A-number (unless self-referential via OEIS links). Use `@cache` or `@lru_cache` for recursion.
 
-In some cases it may be important to catch invalid input. (This is more common with full programs uploaded to the OEIS and listed under the links section.) In those cases, you should throw an error (or at least a warning) in the manner appropriate to your language. ''It is actively harmful'' to return a 0 in such cases; if it is important to find invalid input, you should not hide this with potentially-valid output like 0 or -1 but rather alert the user. So
+## 5. Philosophy (Condensed)
+*   **Clarity > Golfing:** Code should be readable.
+*   **No Input Validation:** Assume `n` is valid per the domain. Don't return `0` for invalid input; let it crash or be undefined.
+*   **Minimal Comments:** Only explain complex math or algorithm tricks.
 
-:<code>m >= 0 || alert('Input ' + m + ' is invalid!');</code>
-
-or
-
-:<code>if(type(x) != "t_INT", error("x must be an integer: "x))</code>
-
-or
-
-:<code>if (n instanceof Integer == false)</code>
-::<code>throw new Exception("n cannot be interpreted as an integer: " + n)</code>
-
-or even
-
-:<code>if (n < 0) exit(EXIT_FAILURE);</code>
-
-See also the [http://www.open-std.org/jtc1/sc22/wg14/www/docs/n1124.pdf C standard] (3.4.3, undefined behavior) and the [http://pari.math.u-bordeaux.fr/pub/pari/manuals/2.10.0/users.pdf PARI User's Manual] (1.4, The PARI philosophy).
-
-== Format ==
-Readability is important. Programs should be kept to a minimum reasonable size (but please don't {{Wikipedia|Code golf|golf}}).
-
-Sometimes a sequence is very hard to compute, or computing it efficiently is of great importance. In these cases full programs may be required, more than will reasonably fit in the Programs section. In that case the program should be uploaded and displayed in the Links section, with a pointer under Programs, e.g.:
-: (Perl) See Smith link.
-In this case the normal restrictions on comments do not apply, indeed, comments are recommended in full programs. Likewise, checking inputs for validity is often a good idea and even unit tests might be reasonable in full programs.
-
+## 6. Workflow for Fixing Sequences
+1.  Run `uv run examine_sequence.py Axxxxxx`.
+2.  Identify the failure (Mismatch? Timeout? Error?).
+3.  Edit `pythonprogs/.../Axxxxxx.py`.
+    *   *Tip:* Use `replace` tool for targeted fixes.
+    *   *Tip:* Rename functions to match conventions (`a`, `first`).
+4.  Re-run `examine_sequence.py` to verify.
