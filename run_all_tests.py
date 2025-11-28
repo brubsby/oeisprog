@@ -1,3 +1,4 @@
+import random
 import os
 import sys
 import multiprocessing
@@ -22,7 +23,8 @@ def get_sequences():
                 # Verify format roughly
                 if len(a_num) == 7 and a_num[0] == 'A':
                     sequences.append(a_num)
-    return sorted(sequences)
+    random.shuffle(sequences) # Shuffle the sequences
+    return sequences
 
 def test_sequence(a_num):
     """

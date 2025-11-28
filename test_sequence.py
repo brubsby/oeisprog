@@ -135,8 +135,26 @@ def run_test_for_code(a_num, code, offset, expected_terms, timeout):
     
     execution_error = None
     try:
+        # Parse AST to potentially optimize list comprehensions
+        tree = ast.parse(code)
+        
+        # Transformation: Convert top-level ListComp assignments to GeneratorExp
+        # to prevent timeouts on large pre-computed lists.
+        for node in tree.body:
+            if isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if isinstance(target, ast.Name) and target.id.endswith('_list'):
+                        if isinstance(node.value, ast.ListComp):
+                            # Convert to GeneratorExp
+                            node.value = ast.GeneratorExp(
+                                elt=node.value.elt, 
+                                generators=node.value.generators
+                            )
+                            ast.fix_missing_locations(node.value)
+                            break # Only modify the value once
+
         # Compile first to set filename for introspection
-        compiled_code = compile(code, code_filename_hint(a_num), 'exec')
+        compiled_code = compile(tree, code_filename_hint(a_num), 'exec')
         exec(compiled_code, context)
     except TimeoutError:
         execution_error = f"  [ERROR] Execution timed out during module load (limit: {alarm_time}s)"
@@ -193,18 +211,40 @@ def run_test_for_code(a_num, code, offset, expected_terms, timeout):
              a_func = candidate
              func_name = a_num
              
-    elif f"{a_num}_list" in context and isinstance(context[f"{a_num}_list"], list):
-        # Support for list based generation (e.g. Axxxxxx_list = [...])
-        the_list = context[f"{a_num}_list"]
-        func_name = f"{a_num}_list"
-        is_list_based = True
-        # Define a closure to access the list safely
-        def list_accessor(n):
-            idx = n - offset
-            if 0 <= idx < len(the_list):
-                return the_list[idx]
-            raise IndexError(f"Index {n} (offset {offset}) out of range for list of length {len(the_list)}")
-        a_func = list_accessor
+    elif f"{a_num}_list" in context:
+        obj = context[f"{a_num}_list"]
+        if isinstance(obj, list):
+            # Support for list based generation (e.g. Axxxxxx_list = [...])
+            the_list = obj
+            func_name = f"{a_num}_list"
+            is_list_based = True
+            # Define a closure to access the list safely
+            def list_accessor(n):
+                idx = n - offset
+                if 0 <= idx < len(the_list):
+                    return the_list[idx]
+                raise IndexError(f"Index {n} (offset {offset}) out of range for list of length {len(the_list)}")
+            a_func = list_accessor
+        elif hasattr(obj, '__next__') or hasattr(obj, '__iter__'):
+             # Support for generator based lists (from AST transform)
+             if hasattr(obj, '__iter__') and not hasattr(obj, '__next__'):
+                 gen_iter = iter(obj)
+             else:
+                 gen_iter = obj
+             
+             gen_cache = []
+             func_name = f"{a_num}_list"
+             
+             def gen_accessor_list(n):
+                 target_idx = n - offset
+                 if target_idx < 0: raise IndexError
+                 while len(gen_cache) <= target_idx:
+                     try:
+                         gen_cache.append(next(gen_iter))
+                     except StopIteration:
+                         raise IndexError
+                 return gen_cache[target_idx]
+             a_func = gen_accessor_list
 
     # Check if a_func is actually returning a list (bulk generation)
     if a_func and not is_list_based:

@@ -12,16 +12,30 @@ def get_available_sequences(base_dir):
                 sequences.append(file[:-3]) # Strip .py
     return sequences
 
-def main():
-    python_progs_dir = 'pythonprogs'
-    if not os.path.exists(python_progs_dir):
-        print(f"Directory '{python_progs_dir}' not found.")
-        return
+def get_sequences_from_stdin():
+    sequences = []
+    if not sys.stdin.isatty():
+        content = sys.stdin.read()
+        sequences = re.findall(r'A\d{6}', content)
+    return sequences
 
-    sequences = get_available_sequences(python_progs_dir)
-    if not sequences:
-        print("No extracted Python sequences found.")
-        return
+def main():
+    # Try getting sequences from stdin first
+    sequences = get_sequences_from_stdin()
+    
+    if sequences:
+        print(f"Found {len(sequences)} sequences from stdin.")
+    else:
+        # Fallback to directory walk
+        python_progs_dir = 'pythonprogs'
+        if not os.path.exists(python_progs_dir):
+            print(f"Directory '{python_progs_dir}' not found.")
+            return
+
+        sequences = get_available_sequences(python_progs_dir)
+        if not sequences:
+            print("No extracted Python sequences found.")
+            return
 
     choice = random.choice(sequences)
     

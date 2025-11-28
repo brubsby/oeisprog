@@ -43,6 +43,21 @@ This document outlines the environment, tools, and conventions for the `oeisprog
 *   **Add Sequences:** Whenever you fix a sequence and verify it passes all tests, add its A-number to the `sequences` list in `regression_tests.py`.
 *   **Run Tests:** Always run `uv run regression_tests.py` after making changes to `test_sequence.py` or `extract_python_oeis.py`.
 
+### `run_all_tests.py`
+**Usage:** `uv run run_all_tests.py`
+**Purpose:**
+*   Scans the entire `pythonprogs/` directory.
+*   Runs `test_sequence.py` on every available script.
+*   Generates `test_report.txt` and `failures.txt`.
+*   Useful for bulk validation or finding regressions across the entire library.
+
+### `examine_random.py`
+**Usage:** `uv run examine_random.py` or `cat failures.txt | uv run examine_random.py`
+**Purpose:**
+*   Picks a random sequence to examine.
+*   **Piping:** If you pipe text into it (like `failures.txt`), it extracts all `Axxxxxx` identifiers from the input and picks a random one *from that list*.
+*   Useful for "feeling lucky" or randomly triaging a list of known failures.
+
 ## 3. Coding Conventions
 
 When writing or fixing scripts, adhere to these naming conventions to ensure `test_sequence.py` can verify them automatically.
@@ -80,6 +95,7 @@ When writing or fixing scripts, adhere to these naming conventions to ensure `te
 *   **Clarity > Golfing:** Code should be readable.
 *   **No Input Validation:** Assume `n` is valid per the domain. Don't return `0` for invalid input; let it crash or be undefined.
 *   **Minimal Comments:** Only explain complex math or algorithm tricks.
+*   **Minimal Changes:** When fixing scripts, make the minimal changes necessary to pass tests. Preserve the original style and structure where possible.
 
 ## 6. Workflow for Fixing Sequences
 1.  Run `uv run examine_sequence.py Axxxxxx`.
@@ -89,3 +105,4 @@ When writing or fixing scripts, adhere to these naming conventions to ensure `te
     *   *Tip:* Rename functions to match conventions (`a`, `first`).
 4.  Re-run `examine_sequence.py` to verify.
 5.  If confirmed passing, add `Axxxxxx` to the `AWAITING_FIX` list `regression_tests.py`, as your fix will be overwritten by the extraction process in the regression test.
+6.  Run `uv run regression_tests.py` to ensure the new sequence passes in the full suite and no other tests are broken.
