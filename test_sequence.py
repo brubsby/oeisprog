@@ -152,6 +152,59 @@ def run_test_for_code(a_num, code, offset, expected_terms, timeout):
                             )
                             ast.fix_missing_locations(node.value)
                             break # Only modify the value once
+            elif isinstance(node, ast.If):
+                # Check for "if __name__ == '__main__':"
+                is_main = False
+                try:
+                    if (isinstance(node.test, ast.Compare) and 
+                        isinstance(node.test.left, ast.Name) and node.test.left.id == '__name__' and
+                        isinstance(node.test.ops[0], ast.Eq)):
+                         # Check comparators
+                        comp = node.test.comparators[0]
+                        val = None
+                        if isinstance(comp, ast.Constant):
+                            val = comp.value
+                        elif hasattr(ast, 'Str') and isinstance(comp, ast.Str):
+                            val = comp.s
+                        if val == '__main__':
+                            is_main = True
+                except Exception:
+                    pass
+
+                if is_main:
+                     # Scan body for print([ListComp])
+                     for j, subnode in enumerate(node.body):
+                         if (isinstance(subnode, ast.Expr) and 
+                             isinstance(subnode.value, ast.Call) and
+                             isinstance(subnode.value.func, ast.Name) and 
+                             subnode.value.func.id == 'print' and
+                             len(subnode.value.args) == 1 and
+                             isinstance(subnode.value.args[0], ast.ListComp)):
+                             
+                             # Found print([ ... ])
+                             lc = subnode.value.args[0]
+                             
+                             # Convert to GeneratorExp
+                             gen_exp = ast.GeneratorExp(elt=lc.elt, generators=lc.generators)
+                             
+                             # Create For loop: for _oeis_print_iter in gen_exp: print(_oeis_print_iter)
+                             iter_var = ast.Name(id='_oeis_print_iter', ctx=ast.Store())
+                             print_call = ast.Call(
+                                 func=ast.Name(id='print', ctx=ast.Load()),
+                                 args=[ast.Name(id='_oeis_print_iter', ctx=ast.Load())],
+                                 keywords=[]
+                             )
+                             
+                             for_loop = ast.For(
+                                 target=iter_var,
+                                 iter=gen_exp,
+                                 body=[ast.Expr(value=print_call)],
+                                 orelse=[]
+                             )
+                             
+                             ast.copy_location(for_loop, subnode)
+                             ast.fix_missing_locations(for_loop)
+                             node.body[j] = for_loop
 
         # Compile first to set filename for introspection
         compiled_code = compile(tree, code_filename_hint(a_num), 'exec')
@@ -579,6 +632,40 @@ def run_test_for_code(a_num, code, offset, expected_terms, timeout):
                         pass
                     
                     if is_main:
+                        # Transformation: Convert print([ListComp]) to incremental print loop
+                        for j, subnode in enumerate(node.body):
+                             if (isinstance(subnode, ast.Expr) and 
+                                 isinstance(subnode.value, ast.Call) and
+                                 isinstance(subnode.value.func, ast.Name) and 
+                                 subnode.value.func.id == 'print' and
+                                 len(subnode.value.args) == 1 and
+                                 isinstance(subnode.value.args[0], ast.ListComp)):
+                                 
+                                 lc = subnode.value.args[0]
+                                 
+                                 # Convert to GeneratorExp
+                                 gen_exp = ast.GeneratorExp(elt=lc.elt, generators=lc.generators)
+                                 
+                                 # Create For loop: for _oeis_print_iter in gen_exp: print(_oeis_print_iter)
+                                 iter_var = ast.Name(id='_oeis_print_iter', ctx=ast.Store())
+                                 print_call = ast.Call(
+                                     func=ast.Name(id='print', ctx=ast.Load()),
+                                     args=[ast.Name(id='_oeis_print_iter', ctx=ast.Load())],
+                                     keywords=[]
+                                 )
+                                 
+                                 for_loop = ast.For(
+                                     target=iter_var,
+                                     iter=gen_exp,
+                                     body=[ast.Expr(value=print_call)],
+                                     orelse=[]
+                                 )
+                                 
+                                 ast.copy_location(for_loop, subnode)
+                                 ast.fix_missing_locations(for_loop)
+                                 node.body[j] = for_loop
+                                 modified = True
+
                         if node.body and isinstance(node.body[-1], ast.Expr):
                             # Replace the last expression with an assignment
                             # _test_runner_result = <expr>

@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "gmpy2>=2.2.1",
+    "graphillion>=2.1",
     "msmath>=1.0.21",
     "num2words>=0.5.14",
     "numpy>=2.3.5",
