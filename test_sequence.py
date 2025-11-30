@@ -105,6 +105,107 @@ def compare_lists(expected, got):
 def code_filename_hint(a_num):
     return f"<oeis_code_{a_num}>"
 
+def run_b_file_generation(a_num, code, offset, timeout):
+    # Prepare context with stubs
+    context = {}
+    found_ids = set(re.findall(r'A\d{6}', code))
+    if a_num in found_ids:
+        found_ids.remove(a_num)
+        
+    for aid in found_ids:
+        context[aid] = StubSequence(aid)
+
+    # Timeout setup
+    signal.signal(signal.SIGALRM, timeout_handler)
+    alarm_time = max(5, int(timeout))
+    signal.alarm(alarm_time)
+    
+    context['__name__'] = 'oeis_module' # Avoid __main__ blocks
+    
+    try:
+        exec(code, context)
+    except Exception as e:
+        sys.stderr.write(f"Error executing code: {e}\n")
+        return
+    finally:
+        signal.alarm(0)
+
+    # Find a(n)
+    a_func = None
+    gen_func = None
+    
+    # Check 'a' function
+    if 'a' in context and callable(context['a']):
+        a_func = context['a']
+    elif a_num in context and callable(context[a_num]):
+        a_func = context[a_num]
+    
+    # Check generators
+    if not a_func:
+        possible_gen_names = ["agen", "a_gen", f"{a_num}gen", f"{a_num}_gen"]
+        for name in possible_gen_names:
+            if name in context and callable(context[name]):
+                gen_func = context[name]
+                break
+        
+        if not gen_func:
+             for name, obj in context.items():
+                 if (name.endswith("_gen") or name.endswith("gen")) and callable(obj):
+                     gen_func = obj
+                     break
+        
+        if gen_func:
+            try:
+                gen_iter = gen_func()
+                gen_cache = []
+                def gen_accessor(n):
+                    target_idx = n - offset
+                    if target_idx < 0: return None
+                    while len(gen_cache) <= target_idx:
+                        gen_cache.append(next(gen_iter))
+                    return gen_cache[target_idx]
+                a_func = gen_accessor
+            except Exception:
+                pass
+
+    if not a_func:
+        sys.stderr.write(f"No suitable a(n) function found for {a_num}.\n")
+        return
+
+    # Generate b-file
+    start_time = time.time()
+    n = offset
+    count = 0
+    limit = 200 # Default limit
+    
+    # Reset alarm for loop
+    signal.alarm(max(1, int(timeout)))
+    
+    try:
+        while count < limit:
+            # Check time
+            if time.time() - start_time > timeout:
+                break
+                
+            try:
+                val = a_func(n)
+                if val is not None:
+                    print(f"{n} {val}")
+                else:
+                    break # Stop if None returned (e.g. generator exhausted or pre-offset)
+            except (StopIteration, IndexError):
+                break
+            except Exception as e:
+                sys.stderr.write(f"Error computing a({n}): {e}\n")
+                break
+            
+            n += 1
+            count += 1
+    except TimeoutError:
+        sys.stderr.write(f"Timeout reached ({timeout}s)\n")
+    finally:
+        signal.alarm(0)
+
 def run_test_for_code(a_num, code, offset, expected_terms, timeout):
     report_messages = []
     
@@ -752,6 +853,9 @@ def run_test_for_code(a_num, code, offset, expected_terms, timeout):
                  else:
                      func_report += f"PASS (checked {checked} terms)"
                  report_messages.append(func_report)
+             elif failures > 0:
+                 tests_run = True
+                 report_messages.append(func_report)
 
         # Check stdout if still needed or if just supplementing
         output_str = captured_output.getvalue()
@@ -773,7 +877,7 @@ def run_test_for_code(a_num, code, offset, expected_terms, timeout):
     
     return report_messages
 
-def test_file(a_num, timeout=1.0):
+def test_file(a_num, timeout=1.0, b_file=False):
     bucket = a_num[:4]
     file_path = os.path.join('pythonprogs', bucket, f"{a_num}.py")
     file_path = os.path.abspath(file_path)
@@ -784,10 +888,13 @@ def test_file(a_num, timeout=1.0):
         report_messages.append(f"File not found for {a_num}: {file_path}")
         return report_messages
 
-    report_messages.append(f"Testing {a_num} ({file_path})...")
+    if not b_file:
+        report_messages.append(f"Testing {a_num} ({file_path})...")
     
     offset, expected_terms = load_oeis_data(a_num)
-    if expected_terms is None:
+    if offset is None:
+        offset = 0 # Default if unknown
+    if expected_terms is None and not b_file:
         report_messages.append(f"  [SKIP] No data found for {a_num}")
         return report_messages
 
@@ -803,6 +910,15 @@ def test_file(a_num, timeout=1.0):
     raw_sections = full_code.split("# OEIS_PYTHON_SEPARATOR")
     code_sections = [s for s in raw_sections if s.strip()]
     
+    if b_file:
+        # For b-file, just use the first section or the one that works?
+        # Usually only one.
+        if code_sections:
+            run_b_file_generation(a_num, code_sections[0], offset, timeout)
+        else:
+            sys.stderr.write("No code found.\n")
+        return [] # No report messages for b-file mode
+
     if len(code_sections) > 1:
         report_messages.append(f"  Found {len(code_sections)} code sections.")
         
@@ -820,6 +936,7 @@ def main():
     parser = argparse.ArgumentParser(description="Test OEIS Python programs.")
     parser.add_argument("a_number", help="The OEIS A-number (e.g., A000045).")
     parser.add_argument("--timeout", type=float, default=1.0, help="Timeout in seconds for testing loops (default: 1.0).")
+    parser.add_argument("--b-file", action="store_true", help="Generate a b-file to stdout instead of testing.")
     args = parser.parse_args()
     
     # Basic validation for A-number format
@@ -827,7 +944,7 @@ def main():
         print(f"Invalid A-number format: {args.a_number}. Expected format like A000045.", file=sys.stderr)
         sys.exit(1)
 
-    messages = test_file(args.a_number, timeout=args.timeout)
+    messages = test_file(args.a_number, timeout=args.timeout, b_file=args.b_file)
     for msg in messages:
         print(msg)
 
