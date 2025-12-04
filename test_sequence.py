@@ -603,14 +603,23 @@ def run_test_for_code(a_num, code, offset, expected_terms, timeout):
         loop_alarm = max(1, int(timeout))
         signal.signal(signal.SIGALRM, timeout_handler)
         signal.alarm(loop_alarm)
+        
+        start_time = time.time()
+        extra_terms = 0
 
         try:
-            for i in range(limit):
+            # 1. Check against expected terms
+            for i in range(len(expected_terms)):
                 n = offset + i
+                
+                # Check timeout explicitly for finer control
+                if time.time() - start_time > timeout:
+                    timed_out = True
+                    break
+
                 try:
                     val = a_func(n)
                 except IndexError:
-                    # If list is exhausted
                     list_exhausted = True
                     break
                 
@@ -619,6 +628,24 @@ def run_test_for_code(a_num, code, offset, expected_terms, timeout):
                     failures += 1
                     break
                 checked += 1
+            
+            # 2. Continue generating terms until timeout if no failures yet
+            if failures == 0 and not list_exhausted and not timed_out:
+                n = offset + len(expected_terms)
+                while time.time() - start_time <= timeout:
+                    try:
+                        val = a_func(n)
+                        extra_terms += 1
+                        n += 1
+                    except IndexError:
+                        list_exhausted = True
+                        break
+                    except StopIteration:
+                        list_exhausted = True
+                        break
+                if time.time() - start_time > timeout:
+                    timed_out = True
+
         except TimeoutError:
             timed_out = True
         except Exception as e:
@@ -626,26 +653,31 @@ def run_test_for_code(a_num, code, offset, expected_terms, timeout):
             failures = -1
         finally:
             signal.alarm(0)
+            duration = time.time() - start_time
             
         if failures != -1:
             if failures == 0:
-                # If list based and checked 0, it implies the list was empty or not populated.
-                # Or if list exhausted prematurely, we might need to run the script to populate it.
+                msg = f"PASS (checked {checked} terms"
+                if extra_terms > 0:
+                    msg += f" + {extra_terms} extra"
+                
                 if is_list_based and (checked == 0 or (list_exhausted and checked < len(expected_terms))):
-                    run_guarded_fallback = True
-                    # Remove the previous "Function ... : " prefix effectively by not appending to report yet
-                    # Only if we haven't actually confirmed enough terms?
-                    # Actually, if we run fallback, we should re-test.
-                    tests_run = False # Treat as if not run, to trigger fallback logic and re-check
+                     # Fallback logic for partial lists...
+                     if extra_terms == 0: # Only fallback if we didn't manage to go beyond
+                        run_guarded_fallback = True
+                        tests_run = False
+                     else:
+                        msg += f", list exhausted, took {duration:.3f}s)"
+                        report_messages.append(func_report + msg)
                 elif timed_out:
-                     func_report += f"PASS (checked {checked} terms, timed out after {loop_alarm}s)"
-                     report_messages.append(func_report)
+                     msg += f", timed out after {duration:.3f}s)"
+                     report_messages.append(func_report + msg)
                 elif list_exhausted:
-                     func_report += f"PASS (checked {checked} terms, list exhausted)"
-                     report_messages.append(func_report)
+                     msg += f", list exhausted, took {duration:.3f}s)"
+                     report_messages.append(func_report + msg)
                 else:
-                     func_report += f"PASS (checked {checked} terms)"
-                     report_messages.append(func_report)
+                     msg += f", took {duration:.3f}s)"
+                     report_messages.append(func_report + msg)
             else:
                 report_messages.append(func_report)
     else:

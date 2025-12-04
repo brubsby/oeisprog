@@ -20,10 +20,10 @@ def main():
     # Resolve to absolute path to be safe
     abs_path = os.path.abspath(file_path)
 
-    if not os.path.exists(abs_path):
-        print(f"Error: File not found at {abs_path}", file=sys.stderr)
-        print("Run 'examine_sequence.py' first or check the A-number.", file=sys.stderr)
-        sys.exit(1)
+#    if not os.path.exists(abs_path):
+#        print(f"Error: File not found at {abs_path}", file=sys.stderr)
+#        print("Run 'examine_sequence.py' first or check the A-number.", file=sys.stderr)
+#        sys.exit(1)
 
     editor = os.environ.get('EDITOR')
     if not editor:
