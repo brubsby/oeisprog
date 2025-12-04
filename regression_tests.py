@@ -3,7 +3,11 @@ import sys
 import os
 
 AWAITING_FIX = ["A000045", "A000111", "A369104", "A238449"]
-SEQUENCES = ["A352687", "A320890", "A370447", "A359198", "A051064", "A208529", "A158022", "A000292", "A000414", "A342810", "A056303"]
+SEQUENCES = ["A352687", "A320890", "A370447", "A359198", "A051064", "A208529", "A158022", "A000292", "A000414",     "A342810", # Generates list, uses list index
+    "A056303", # Generates list in main block
+    "A361745", # 2D array function, now wrapped automatically
+    "A000370", # Complex logic, SymPy dependency, uses __main__ block
+]
 
 def extract_and_verify(a_num):
     """

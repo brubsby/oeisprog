@@ -7,6 +7,31 @@ import signal
 import io
 import ast
 import inspect
+import math
+
+def wrap_2d_candidate(func, strategy, offset):
+    def wrapper(n):
+        idx = n - offset
+        if idx < 0: return 0
+        
+        if strategy == 'antidiag':
+            # Square array read by antidiagonals: (0,0), (0,1), (1,0), (0,2), (1,1), (2,0)...
+            # d is diagonal index. T_d = d*(d+1)/2.
+            # idx = T_d + k.
+            # w = floor((sqrt(8*idx + 1) - 1) / 2)
+            w = math.floor((math.sqrt(8 * idx + 1) - 1) / 2)
+            t = w * (w + 1) // 2
+            k = idx - t
+            # Traversal (0, w) -> (w, 0) corresponds to row = k, col = w - k
+            return func(k, w - k)
+        elif strategy == 'triangle':
+            # Triangular array read by rows: (0,0), (1,0), (1,1), (2,0), (2,1)...
+            w = math.floor((math.sqrt(8 * idx + 1) - 1) / 2)
+            t = w * (w + 1) // 2
+            k = idx - t
+            return func(w, k)
+        return 0
+    return wrapper
 
 def timeout_handler(signum, frame):
     raise TimeoutError("Execution timed out")
@@ -525,6 +550,41 @@ def run_test_for_code(a_num, code, offset, expected_terms, timeout):
                 # Only assign to a_func if it didn't look like a list generator
                 func_name = candidate_name
                 a_func = candidate_func
+
+    # Check for 2D function requiring wrapper
+    if a_func and callable(a_func) and not is_list_based:
+        try:
+            sig = inspect.signature(a_func)
+            params = [p for p in sig.parameters.values() if p.default == inspect.Parameter.empty and p.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)]
+            if len(params) == 2:
+                # 2D function detected. Probe strategies.
+                strategies = ['antidiag', 'triangle']
+                best_wrapper = None
+                
+                if expected_terms and len(expected_terms) >= 3:
+                    for strat in strategies:
+                        wrapper = wrap_2d_candidate(a_func, strat, offset)
+                        match = True
+                        # Check first few terms to decide strategy
+                        check_len = min(len(expected_terms), 5)
+                        for i in range(check_len):
+                            try:
+                                val = wrapper(offset + i)
+                                if val != expected_terms[i]:
+                                    match = False
+                                    break
+                            except Exception:
+                                match = False
+                                break
+                        if match:
+                            best_wrapper = wrapper
+                            func_name += f" (wrapped {strat})"
+                            break
+                
+                if best_wrapper:
+                    a_func = best_wrapper
+        except ValueError:
+            pass
 
     # Execute the test for a(n)
     run_guarded_fallback = False
