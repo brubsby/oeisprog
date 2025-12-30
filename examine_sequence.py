@@ -10,7 +10,7 @@ def main():
     args = parser.parse_args()
 
     choice = args.a_number
-    python_progs_dir = 'pythonprogs'
+    python_progs_dir = 'sanitized'
     
     if not re.match(r'^A\d{6}$', choice):
         print(f"Invalid A-number format: {choice}. Expected format like A000045.", file=sys.stderr)
@@ -28,20 +28,30 @@ def main():
     except Exception as e:
         print(f"Error running read_sequence.py: {e}")
 
-    # 2. Print Extracted Code
-    print(f"\n>>> Extracted Python Code (pythonprogs/.../{choice}.py)")
+    print(f"\n>>> Extracted Programs (progs/ and sanitized/)")
     print("-" * 60)
-    # Reconstruct path
+    
     bucket = choice[:4]
-    file_path = os.path.join(python_progs_dir, bucket, f"{choice}.py")
-    if os.path.exists(file_path):
-        try:
-            with open(file_path, 'r') as f:
-                print(f.read())
-        except Exception as e:
-            print(f"Error reading extracted file: {e}")
-    else:
-        print(f"Extracted file not found at {file_path}")
+    dirs_to_check = ['progs', 'sanitized']
+    found_any = False
+    
+    for base_dir in dirs_to_check:
+        seq_dir = os.path.join(base_dir, bucket, choice)
+        if os.path.exists(seq_dir):
+            files = sorted([f for f in os.listdir(seq_dir) if f.startswith(choice)])
+            for filename in files:
+                file_path = os.path.join(seq_dir, filename)
+                print(f"--- {base_dir}/{filename} ---")
+                try:
+                    with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
+                        print(f.read())
+                    found_any = True
+                except Exception as e:
+                    print(f"Error reading {filename}: {e}")
+                print()
+
+    if not found_any:
+        print(f"No extracted programs found for {choice}")
 
     # 3. Run Test
     print(f"\n>>> Test Results (via test_sequence.py {args.a_number})")

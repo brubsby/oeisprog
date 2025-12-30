@@ -7,7 +7,7 @@ import time
 from datetime import datetime
 
 # Configuration
-PYTHON_PROGS_DIR = "pythonprogs"
+PYTHON_PROGS_DIR = "sanitized"
 REPORT_FILE = "test_report.txt"
 FAILURES_FILE = "failures.txt"
 TIMEOUT = 2.0  # Slightly higher timeout for safety
@@ -15,14 +15,21 @@ WORKERS = max(1, os.cpu_count() or 4)
 
 def get_sequences():
     sequences = []
+    # Structure: sanitized/A000/A000002/A000002_python_1.py
     for root, dirs, files in os.walk(PYTHON_PROGS_DIR):
         for file in files:
-            if file.startswith("A") and file.endswith(".py"):
-                # Extract A-number (filename minus extension)
-                a_num = os.path.splitext(file)[0]
-                # Verify format roughly
-                if len(a_num) == 7 and a_num[0] == 'A':
-                    sequences.append(a_num)
+            if file.startswith("A") and "_python_" in file and file.endswith(".py"):
+                # Extract A-number (first part of filename)
+                # Filename format: Axxxxxx_python_N.py
+                parts = file.split('_')
+                if len(parts) >= 1:
+                    a_num = parts[0]
+                    # Verify format roughly
+                    if len(a_num) == 7 and a_num[0] == 'A':
+                        sequences.append(a_num)
+    
+    # Remove duplicates since multiple files might exist for one sequence
+    sequences = list(set(sequences))
     random.shuffle(sequences) # Shuffle the sequences
     return sequences
 

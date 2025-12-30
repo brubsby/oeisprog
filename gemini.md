@@ -10,7 +10,7 @@ This document outlines the environment, tools, and conventions for the `oeisprog
 *   **`test_sequence.py`**: The core testing framework. It loads the code, mocks `load_oeis_data`, and attempts to verify `a(n)`, `first(n)`, or `is(n)` against known terms.
 *   **`regression_tests.py`**: Runs a suite of tests against key sequences to prevent regressions in the testing and extraction tools.
 *   **`examine_sequence.py`**: The primary entry point for developers. It combines data fetching, code display, and testing into a single report.
-*   **`extract_python_oeis.py`**: Utility to scrape/update Python code from raw OEIS data files.
+*   **`extract_programs_oeis.py`**: Utility to scrape/update Python code from raw OEIS data files.
 
 ## 2. Tooling & Usage
 
@@ -36,12 +36,12 @@ This document outlines the environment, tools, and conventions for the `oeisprog
 ### `regression_tests.py`
 **Usage:** `uv run regression_tests.py`
 **Purpose:**
-*   Verifies `extract_python_oeis.py` correctly extracts and formats code (including stdout printing).
+*   Verifies `extract_programs_oeis.py` correctly extracts and formats code (including stdout printing).
 *   Runs `test_sequence.py` against a set of "known good" sequences (e.g., `A000045`, `A320890`) to ensure test logic remains sound.
 
 **Action:**
 *   **Add Sequences:** Whenever you fix a sequence and verify it passes all tests, add its A-number to the `sequences` list in `regression_tests.py`.
-*   **Run Tests:** Always run `uv run regression_tests.py` after making changes to `test_sequence.py` or `extract_python_oeis.py`.
+*   **Run Tests:** Always run `uv run regression_tests.py` after making changes to `test_sequence.py` or `extract_programs_oeis.py`.
 
 ### `run_all_tests.py`
 **Usage:** `uv run run_all_tests.py`

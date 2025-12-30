@@ -7,6 +7,7 @@ import re
 def main():
     parser = argparse.ArgumentParser(description="Open the extracted Python script for an OEIS sequence in your EDITOR.")
     parser.add_argument("a_number", help="The OEIS A-number (e.g., A000045).")
+    parser.add_argument("index", nargs='?', default="1", help="The program index to edit (default: 1).")
     args = parser.parse_args()
 
     a_num = args.a_number
@@ -15,15 +16,25 @@ def main():
         sys.exit(1)
 
     bucket = a_num[:4]
-    file_path = os.path.join('pythonprogs', bucket, f"{a_num}.py")
+    # Structure: sanitized/Axxx/Axxxxxx/Axxxxxx_python_N.py
+    filename = f"{a_num}_python_{args.index}.py"
+    file_path = os.path.join('sanitized', bucket, a_num, filename)
     
     # Resolve to absolute path to be safe
     abs_path = os.path.abspath(file_path)
 
-#    if not os.path.exists(abs_path):
-#        print(f"Error: File not found at {abs_path}", file=sys.stderr)
-#        print("Run 'examine_sequence.py' first or check the A-number.", file=sys.stderr)
-#        sys.exit(1)
+    if not os.path.exists(abs_path):
+        print(f"Error: File not found at {abs_path}", file=sys.stderr)
+        # Check if dir exists to give better error
+        dir_path = os.path.dirname(abs_path)
+        if os.path.exists(dir_path):
+             print(f"Available files in {dir_path}:")
+             for f in sorted(os.listdir(dir_path)):
+                 if f.endswith('.py'):
+                     print(f"  {f}")
+        else:
+             print("Directory does not exist. Run 'extract_programs_oeis.py' first.")
+        sys.exit(1)
 
     editor = os.environ.get('EDITOR')
     if not editor:

@@ -9,9 +9,13 @@ def get_available_sequences(base_dir):
     sequences = set()
     for root, _, files in os.walk(base_dir):
         for file in files:
-            m = re.match(r'^(A\d{6})\.py$', file)
-            if m:
-                sequences.add(m.group(1))
+            # Nested structure: Axxxxxx_python_N.py
+            if file.startswith('A') and '_python_' in file and file.endswith('.py'):
+                parts = file.split('_')
+                if len(parts) >= 1:
+                    a_num = parts[0]
+                    if len(a_num) == 7 and a_num[0] == 'A':
+                         sequences.add(a_num)
     return sequences
 
 def get_sequences_from_stdin():
@@ -83,7 +87,7 @@ def main():
 
     if args.no_prog:
         print("Scanning python sequences...")
-        python_seqs = get_available_sequences('pythonprogs')
+        python_seqs = get_available_sequences('sanitized')
         choice = get_random_no_prog_sequence(python_seqs)
         if not choice:
             print("Could not find a sequence with no program after many attempts.")
@@ -95,7 +99,7 @@ def main():
         print(f"Found {len(all_seqs)} sequences with data.")
         
         print("Scanning python sequences...")
-        python_seqs = get_available_sequences('pythonprogs')
+        python_seqs = get_available_sequences('sanitized')
         print(f"Found {len(python_seqs)} python sequences.")
         
         non_python_seqs = list(all_seqs - python_seqs)
@@ -114,7 +118,7 @@ def main():
             print(f"Found {len(sequences)} sequences from stdin.")
         else:
             # Fallback to directory walk
-            python_progs_dir = 'pythonprogs'
+            python_progs_dir = 'sanitized'
             if not os.path.exists(python_progs_dir):
                 print(f"Directory '{python_progs_dir}' not found.")
                 return

@@ -971,17 +971,30 @@ def run_test_for_code(a_num, code, offset, expected_terms, timeout):
 
 def test_file(a_num, timeout=1.0, b_file=False):
     bucket = a_num[:4]
-    file_path = os.path.join('pythonprogs', bucket, f"{a_num}.py")
-    file_path = os.path.abspath(file_path)
-
+    # New Path: sanitized/Axxx/Axxxxxx/
+    base_dir = 'sanitized'
+    seq_dir = os.path.join(base_dir, bucket, a_num)
+    
     report_messages = []
 
-    if not os.path.exists(file_path):
-        report_messages.append(f"File not found for {a_num}: {file_path}")
+    if not os.path.exists(seq_dir):
+        report_messages.append(f"Directory not found for {a_num}: {seq_dir}")
+        return report_messages
+    
+    # Find all python files
+    # Expected naming: Axxxxxx_python_1.py, Axxxxxx_python_2.py, etc.
+    try:
+        files = sorted([f for f in os.listdir(seq_dir) if f.startswith(f"{a_num}_python") and f.endswith('.py')])
+    except OSError as e:
+        report_messages.append(f"Error accessing directory {seq_dir}: {e}")
+        return report_messages
+        
+    if not files:
+        report_messages.append(f"No Python files found in {seq_dir}")
         return report_messages
 
     if not b_file:
-        report_messages.append(f"Testing {a_num} ({file_path})...")
+        report_messages.append(f"Testing {a_num} (found {len(files)} scripts in {seq_dir})...")
     
     offset, expected_terms = load_oeis_data(a_num)
     if offset is None:
@@ -990,36 +1003,30 @@ def test_file(a_num, timeout=1.0, b_file=False):
         report_messages.append(f"  [SKIP] No data found for {a_num}")
         return report_messages
 
-    # Read code
-    try:
-        with open(file_path, 'r') as f:
-            full_code = f.read()
-    except Exception as e:
-        report_messages.append(f"  [ERROR] Could not read file: {e}")
-        return report_messages
-
-    # Split by separator
-    raw_sections = full_code.split("# OEIS_PYTHON_SEPARATOR")
-    code_sections = [s for s in raw_sections if s.strip()]
-    
     if b_file:
-        # For b-file, just use the first section or the one that works?
-        # Usually only one.
-        if code_sections:
-            run_b_file_generation(a_num, code_sections[0], offset, timeout)
-        else:
-            sys.stderr.write("No code found.\n")
-        return [] # No report messages for b-file mode
+        # For b-file, use the first file found.
+        file_path = os.path.join(seq_dir, files[0])
+        try:
+            with open(file_path, 'r') as f:
+                code = f.read()
+            run_b_file_generation(a_num, code, offset, timeout)
+        except Exception:
+            pass
+        return []
 
-    if len(code_sections) > 1:
-        report_messages.append(f"  Found {len(code_sections)} code sections.")
-        
-    for i, code in enumerate(code_sections):
-        if len(code_sections) > 1:
-            report_messages.append(f"  --- Section {i+1} ---")
+    for i, filename in enumerate(files):
+        file_path = os.path.join(seq_dir, filename)
+        if len(files) > 1:
+            report_messages.append(f"  --- Program {i+1} ({filename}) ---")
             
-        section_messages = run_test_for_code(a_num, code, offset, expected_terms, timeout)
-        report_messages.extend(section_messages)
+        try:
+            with open(file_path, 'r') as f:
+                code = f.read()
+            
+            section_messages = run_test_for_code(a_num, code, offset, expected_terms, timeout)
+            report_messages.extend(section_messages)
+        except Exception as e:
+            report_messages.append(f"  [ERROR] Could not read or run {filename}: {e}")
 
     return report_messages
 
