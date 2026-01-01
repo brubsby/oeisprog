@@ -5,9 +5,9 @@ import subprocess
 import re
 
 def main():
-    parser = argparse.ArgumentParser(description="Open the extracted Python script for an OEIS sequence in your EDITOR.")
+    parser = argparse.ArgumentParser(description="Open the extracted script for an OEIS sequence in your EDITOR.")
     parser.add_argument("a_number", help="The OEIS A-number (e.g., A000045).")
-    parser.add_argument("index", nargs='?', default="1", help="The program index to edit (default: 1).")
+    parser.add_argument("extra_args", nargs='*', help="Language and/or index (e.g., 'python 2' or just '2' or 'mathematica').")
     args = parser.parse_args()
 
     a_num = args.a_number
@@ -15,26 +15,43 @@ def main():
         print(f"Invalid A-number format: {a_num}. Expected format like A000045.", file=sys.stderr)
         sys.exit(1)
 
-    bucket = a_num[:4]
-    # Structure: sanitized/Axxx/Axxxxxx/Axxxxxx_python_N.py
-    filename = f"{a_num}_python_{args.index}.py"
-    file_path = os.path.join('sanitized', bucket, a_num, filename)
-    
-    # Resolve to absolute path to be safe
-    abs_path = os.path.abspath(file_path)
+    lang = "python"
+    index = "1"
 
-    if not os.path.exists(abs_path):
-        print(f"Error: File not found at {abs_path}", file=sys.stderr)
-        # Check if dir exists to give better error
-        dir_path = os.path.dirname(abs_path)
-        if os.path.exists(dir_path):
-             print(f"Available files in {dir_path}:")
-             for f in sorted(os.listdir(dir_path)):
-                 if f.endswith('.py'):
-                     print(f"  {f}")
+    if len(args.extra_args) == 1:
+        if args.extra_args[0].isdigit():
+            index = args.extra_args[0]
         else:
-             print("Directory does not exist. Run 'extract_programs_oeis.py' first.")
+            lang = args.extra_args[0]
+    elif len(args.extra_args) >= 2:
+        lang = args.extra_args[0]
+        index = args.extra_args[1]
+
+    bucket = a_num[:4]
+    # Structure: progs/Axxx/Axxxxxx/Axxxxxx_lang_N.extension
+    dir_path = os.path.join('progs', bucket, a_num)
+    
+    if not os.path.exists(dir_path):
+        print(f"Error: Directory not found at {dir_path}", file=sys.stderr)
+        print("Run 'extract_programs_oeis.py' first.")
         sys.exit(1)
+
+    # Find the file with any extension
+    prefix = f"{a_num}_{lang}_{index}."
+    target_file = None
+    for f in os.listdir(dir_path):
+        if f.startswith(prefix):
+            target_file = f
+            break
+
+    if not target_file:
+        print(f"Error: No file found for {a_num}, language '{lang}', index '{index}' in {dir_path}", file=sys.stderr)
+        print(f"Available files in {dir_path}:")
+        for f in sorted(os.listdir(dir_path)):
+            print(f"  {f}")
+        sys.exit(1)
+
+    abs_path = os.path.abspath(os.path.join(dir_path, target_file))
 
     editor = os.environ.get('EDITOR')
     if not editor:
