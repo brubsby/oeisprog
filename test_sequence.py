@@ -264,6 +264,7 @@ def run_test_for_code(a_num, code, offset, expected_terms, timeout):
     try:
         # Parse AST to potentially optimize list comprehensions
         tree = ast.parse(code)
+
         
         # Transformation: Convert top-level ListComp assignments to GeneratorExp
         # to prevent timeouts on large pre-computed lists.
@@ -835,7 +836,7 @@ def run_test_for_code(a_num, code, offset, expected_terms, timeout):
                         pass
                     
                     if is_main:
-                        # Transformation: Convert print([ListComp]) to incremental print loop
+                        # Transformation 1: Convert print([ListComp]) to incremental print loop
                         for j, subnode in enumerate(node.body):
                              if (isinstance(subnode, ast.Expr) and 
                                  isinstance(subnode.value, ast.Call) and
@@ -868,6 +869,22 @@ def run_test_for_code(a_num, code, offset, expected_terms, timeout):
                                  ast.fix_missing_locations(for_loop)
                                  node.body[j] = for_loop
                                  modified = True
+                             
+                             # Transformation 2: Convert Axxxxxx = [ListComp] to GeneratorExp
+                             elif (isinstance(subnode, ast.Assign) and 
+                                   isinstance(subnode.value, ast.ListComp)):
+                                 for target in subnode.targets:
+                                     if isinstance(target, ast.Name) and target.id == a_num:
+                                         # Found assignment to sequence ID
+                                         lc = subnode.value
+                                         gen_exp = ast.GeneratorExp(elt=lc.elt, generators=lc.generators)
+                                         ast.copy_location(gen_exp, lc)
+                                         ast.fix_missing_locations(gen_exp)
+                                         
+                                         # Replace the value
+                                         subnode.value = gen_exp
+                                         modified = True
+                                         break
 
                         if node.body and isinstance(node.body[-1], ast.Expr):
                             # Replace the last expression with an assignment
@@ -917,6 +934,45 @@ def run_test_for_code(a_num, code, offset, expected_terms, timeout):
                 else:
                     detail = compare_lists(expected_terms[:match_len], res[:match_len])
                     report_messages.append(f"  Script result: FAIL ({detail})")
+
+        # Check if the sequence variable itself is available (e.g. from assignment in main)
+        if not tests_run and a_num in context:
+            obj = context[a_num]
+            res_list = []
+            
+            # Consume if generator/iterator
+            if hasattr(obj, '__iter__') or hasattr(obj, '__next__'):
+                 if hasattr(obj, '__iter__') and not hasattr(obj, '__next__'):
+                     it = iter(obj)
+                 else:
+                     it = obj
+                 
+                 # Set alarm for consumption
+                 signal.signal(signal.SIGALRM, timeout_handler)
+                 signal.alarm(max(1, int(timeout)))
+                 
+                 try:
+                     # Fetch enough terms to check
+                     for _ in range(len(expected_terms)):
+                         res_list.append(next(it))
+                 except (StopIteration, TimeoutError):
+                     pass
+                 except Exception:
+                     pass
+                 finally:
+                     signal.alarm(0)
+                     
+            elif isinstance(obj, list):
+                res_list = obj
+            
+            if res_list:
+                tests_run = True
+                match_len = min(len(res_list), len(expected_terms))
+                if match_len > 0 and res_list[:match_len] == expected_terms[:match_len]:
+                     report_messages.append(f"  Script variable '{a_num}': PASS (checked {match_len} terms)")
+                else:
+                     detail = compare_lists(expected_terms[:match_len], res_list[:match_len])
+                     report_messages.append(f"  Script variable '{a_num}': FAIL ({detail})")
 
         # If we were retrying because of an unpopulated list, check that list again first!
         if not tests_run and run_guarded_fallback and is_list_based and func_name in context:
