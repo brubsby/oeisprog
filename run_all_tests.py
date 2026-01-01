@@ -28,7 +28,7 @@ def init_worker_process(container_name):
     global WORKER_CONTAINER_NAME
     WORKER_CONTAINER_NAME = container_name
 
-def get_sequences():
+def get_sequences(shuffle=True):
     sequences = []
     for root, dirs, files in os.walk(PYTHON_PROGS_DIR):
         for file in files:
@@ -38,8 +38,9 @@ def get_sequences():
                     a_num = parts[0]
                     if len(a_num) == 7 and a_num[0] == 'A':
                         sequences.append(a_num)
-    sequences = list(set(sequences))
-    random.shuffle(sequences)
+    sequences = sorted(list(set(sequences)))
+    if shuffle:
+        random.shuffle(sequences)
     return sequences
 
 def test_sequence(a_num):
@@ -109,23 +110,49 @@ def main():
     parser.add_argument("--docker", action="store_true", help="Run tests inside Docker container.")
     parser.add_argument("--timeout", type=float, default=2.0, help="Timeout per sequence.")
     parser.add_argument("--workers", type=int, default=WORKERS, help="Number of worker processes.")
+    parser.add_argument("--first-failure", action="store_true", help="Stop after the first failure.")
+    parser.add_argument("-r", "--random", action="store_true", help="Run tests in random order (default).")
+    parser.add_argument("-s", "--sorted", dest="random", action="store_false", help="Run tests in sorted order.")
+    parser.add_argument("-f", "--from", dest="start_at", help="Start tests from this sequence (e.g., A000001). Requires --sorted.")
+    parser.set_defaults(random=True)
     args = parser.parse_args()
 
     global TIMEOUT
     TIMEOUT = args.timeout
     workers_count = args.workers
+    use_random = args.random
+    start_at = args.start_at
+
+    if start_at and use_random:
+        print("Error: --from can only be used with --sorted.")
+        sys.exit(1)
 
     if args.docker and DockerWorker is None:
         print("Error: docker_manager.py not found. Cannot run in Docker mode.")
         sys.exit(1)
 
     print(f"Scanning {PYTHON_PROGS_DIR} for sequences...")
-    sequences = get_sequences()
+    sequences = get_sequences(shuffle=use_random)
+    
+    if start_at:
+        # Validate format
+        if not (len(start_at) == 7 and start_at.startswith('A') and start_at[1:].isdigit()):
+            print(f"Error: Invalid sequence format '{start_at}'. Expected format like A000001.")
+            sys.exit(1)
+        
+        original_count = len(sequences)
+        sequences = [s for s in sequences if s >= start_at]
+        if not sequences:
+            print(f"Error: No sequences found starting from {start_at}.")
+            sys.exit(1)
+        print(f"Filtered to {len(sequences)} sequences (starting from {start_at}).")
+    
     total = len(sequences)
     print(f"Found {total} sequences.")
     
     mode_msg = "Docker Container" if args.docker else "Local Process"
-    print(f"Starting tests with {workers_count} workers ({mode_msg}, timeout={TIMEOUT}s)...")
+    order_msg = "random" if use_random else "sorted"
+    print(f"Starting tests with {workers_count} workers ({mode_msg}, order={order_msg}, timeout={TIMEOUT}s)...")
     
     start_time = time.time()
     
@@ -145,7 +172,7 @@ def main():
             print(f"Docker container started: {container_name}")
 
         with open(REPORT_FILE, "w") as report_f, open(FAILURES_FILE, "w") as fail_f:
-            report_f.write(f"Test Run: {datetime.now()} (Mode: {mode_msg})\n")
+            report_f.write(f"Test Run: {datetime.now()} (Mode: {mode_msg}, Order: {order_msg})\n")
             report_f.write(f"Total Sequences: {total}\n")
             report_f.write("-" * 40 + "\n")
             fail_f.write(f"Failures Report: {datetime.now()}\n")
@@ -155,7 +182,10 @@ def main():
             init_args = (container_name,) if container_name else (None,)
             
             with multiprocessing.Pool(processes=workers_count, initializer=init_worker_process, initargs=init_args) as pool:
-                for i, (a_num, status, summary) in enumerate(pool.imap_unordered(test_sequence, sequences), 1):
+                # Use imap for sorted (to preserve order) or imap_unordered for random
+                imap_func = pool.imap_unordered if use_random else pool.imap
+                
+                for i, (a_num, status, summary) in enumerate(imap_func(test_sequence, sequences), 1):
                     results[status] = results.get(status, 0) + 1
                     
                     sys.stdout.write(f"\r[{i}/{total}] {a_num}: {status.ljust(10)}")
@@ -165,6 +195,12 @@ def main():
                     if status not in ["PASS", "SKIP"]:
                         fail_f.write(f"{a_num}: {status} | {summary}\n")
                         fail_f.flush()
+                        
+                        if args.first_failure:
+                            print(f"\nFirst failure encountered: {a_num} ({status})")
+                            print(f"Summary: {summary}")
+                            pool.terminate()
+                            break
                         
                     if i % 1000 == 0:
                         report_f.flush()
