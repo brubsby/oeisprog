@@ -618,14 +618,23 @@ def run_test_for_code(a_num, code, offset, expected_terms, timeout):
                     timed_out = True
                     break
 
+                val = None
                 try:
                     val = a_func(n)
                 except IndexError:
                     list_exhausted = True
                     break
-                
+
                 if val != expected_terms[i]:
-                    func_report += f"FAIL at n={n}: expected {expected_terms[i]}, got {val}"
+                    msg_extra = ""
+                    try:
+                        if a_func(n+1) == expected_terms[i]:
+                            msg_extra = " (matches n+1, possible offset issue)"
+                        elif a_func(n-1) == expected_terms[i]:
+                            msg_extra = " (matches n-1, possible offset issue)"
+                    except Exception:
+                        pass
+                    func_report += f"FAIL at n={n}: expected {expected_terms[i]}, got {val}{msg_extra}"
                     failures += 1
                     break
                 checked += 1
