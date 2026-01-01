@@ -2,24 +2,25 @@ import subprocess
 import time
 import os
 import uuid
+import sys
+import config
 
 class DockerWorker:
-    def __init__(self, image="oeis-runner", timeout=5, use_host_nix_store=False):
-        self.image = "alpine:latest" if use_host_nix_store else image
+    def __init__(self, timeout=5, use_host_nix_store=False):
+        self.image = "debian:bookworm-slim" if use_host_nix_store else "python:3.9-slim"
         self.container_name = f"oeis-worker-{uuid.uuid4().hex[:8]}"
         self.timeout = timeout
         self.use_host_nix_store = use_host_nix_store
         self.is_running = False
 
-        # Paths - assuming this runs from oeisprog/
-        # Adjust these if your directory structure changes
-        self.abs_prog_dir = os.path.abspath("progs")
-        self.abs_sanitized_dir = os.path.abspath("sanitized")
-        self.abs_runner = os.path.abspath("sandbox_runner.py")
+        # Paths
+        self.cwd = os.getcwd() # Should be .../oeisprog
+        self.oeisprog_dir = self.cwd
+        self.oeisdata_dir = config.get_oeis_data_dir()
         
-        # Determine which directory to mount based on existence
-        self.mount_dir = self.abs_prog_dir if os.path.exists(self.abs_prog_dir) else self.abs_sanitized_dir
-        self.mount_target = "/opt/oeis/progs"
+        # Container Paths (Mirror Host Paths for venv compatibility)
+        self.cont_prog_dir = self.oeisprog_dir
+        self.cont_data_dir = self.oeisdata_dir
 
     def __enter__(self):
         self.start()
@@ -29,17 +30,17 @@ class DockerWorker:
         self.stop()
 
     def start(self):
-        # Ensure image exists (optional check, or let run fail)
         print(f"[Docker] Starting worker container {self.container_name}...")
         
         cmd = [
             "docker", "run", "-d", "--rm",
             "--name", self.container_name,
             "--network", "none",
-            # Mount runner script
-            "-v", f"{self.abs_runner}:/opt/oeis/sandbox_runner.py:ro",
-            # Mount the programs directory
-            "-v", f"{self.mount_dir}:{self.mount_target}:ro",
+            "--workdir", self.cont_prog_dir,
+            # Mount oeisprog (code + scripts)
+            "-v", f"{self.oeisprog_dir}:{self.cont_prog_dir}:ro",
+            # Mount oeisdata (data)
+            "-v", f"{self.oeisdata_dir}:{self.cont_data_dir}:ro",
         ]
 
         if self.use_host_nix_store:
@@ -47,14 +48,11 @@ class DockerWorker:
             cmd.extend([
                 "-v", "/nix/store:/nix/store:ro",
                 "-v", "/run/current-system/sw/bin:/host-bin:ro",
-                # Pass essential env vars if needed, but PATH is set below
+                # Pass PATH so it finds python3, sage, etc.
                 "-e", "PATH=/host-bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
             ])
-            # We might need to mount specific license locations for proprietary tools
-            # e.g. -v /etc/mathematica:/etc/mathematica:ro
         
         cmd.extend([
-            # Keep alive
             self.image,
             "sleep", "infinity"
         ])
@@ -62,7 +60,7 @@ class DockerWorker:
         try:
             subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL)
             self.is_running = True
-            time.sleep(0.5) # Allow container to stabilize
+            time.sleep(0.5) 
         except subprocess.CalledProcessError as e:
             print(f"[Docker] Failed to start container: {e}")
             raise
@@ -74,39 +72,30 @@ class DockerWorker:
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             self.is_running = False
 
-    def run_script(self, a_num, file_path, lang, offset=0, count=10):
+    def run_test_sequence_py(self, a_num):
+        """
+        Runs test_sequence.py inside the container for the given A-number.
+        """
         if not self.is_running:
             raise RuntimeError("Container is not running")
 
-        # Determine path relative to the mounted directory
-        # We need to support both 'progs' and 'sanitized' or whatever was mounted
-        try:
-            rel_path = os.path.relpath(file_path, self.mount_dir)
-        except ValueError:
-            # Fallback if file is not in the mounted dir
-            return "", "File path not in mounted directory", -1
-
-        container_path = f"{self.mount_target}/{rel_path}"
-
-        # Determine interpreter
-        if self.use_host_nix_store:
-            # Use host python to run the runner
-            interpreter = ["/host-bin/python3"]
+        # Determine Interpreter
+        venv_python = os.path.join(self.cont_prog_dir, ".venv", "bin", "python")
+        
+        if self.use_host_nix_store and os.path.exists(os.path.join(self.oeisprog_dir, ".venv", "bin", "python")):
+            # If using host store and venv exists on host (mirrored to container), use it
+            interpreter = venv_python
+        elif self.use_host_nix_store:
+             interpreter = "/host-bin/python3"
         else:
-            # Use image sage-python
-            interpreter = ["sage", "-python"]
+             interpreter = "python3"
 
-        # Command to run INSIDE the container
+        # We run test_sequence.py directly
         exec_cmd = [
             "docker", "exec",
-            self.container_name
-        ] + interpreter + [
-            "/opt/oeis/sandbox_runner.py",
-            "--file", container_path,
-            "--lang", lang,
-            "--id", a_num,
-            "--offset", str(offset),
-            "--count", str(count),
+            self.container_name,
+            interpreter, "test_sequence.py", 
+            a_num,
             "--timeout", str(self.timeout)
         ]
 

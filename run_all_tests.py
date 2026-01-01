@@ -4,33 +4,42 @@ import sys
 import multiprocessing
 import subprocess
 import time
+import argparse
 from datetime import datetime
+
+# Try to import DockerWorker
+try:
+    from docker_manager import DockerWorker
+except ImportError:
+    DockerWorker = None
 
 # Configuration
 PYTHON_PROGS_DIR = "sanitized"
 REPORT_FILE = "test_report.txt"
 FAILURES_FILE = "failures.txt"
-TIMEOUT = 2.0  # Slightly higher timeout for safety
+TIMEOUT = 2.0
 WORKERS = max(1, os.cpu_count() or 4)
+
+# Global variable for worker processes
+WORKER_CONTAINER_NAME = None
+
+def init_worker_process(container_name):
+    """Initializer for pool workers to set the global container name."""
+    global WORKER_CONTAINER_NAME
+    WORKER_CONTAINER_NAME = container_name
 
 def get_sequences():
     sequences = []
-    # Structure: sanitized/A000/A000002/A000002_python_1.py
     for root, dirs, files in os.walk(PYTHON_PROGS_DIR):
         for file in files:
             if file.startswith("A") and "_python_" in file and file.endswith(".py"):
-                # Extract A-number (first part of filename)
-                # Filename format: Axxxxxx_python_N.py
                 parts = file.split('_')
                 if len(parts) >= 1:
                     a_num = parts[0]
-                    # Verify format roughly
                     if len(a_num) == 7 and a_num[0] == 'A':
                         sequences.append(a_num)
-    
-    # Remove duplicates since multiple files might exist for one sequence
     sequences = list(set(sequences))
-    random.shuffle(sequences) # Shuffle the sequences
+    random.shuffle(sequences)
     return sequences
 
 def test_sequence(a_num):
@@ -38,20 +47,32 @@ def test_sequence(a_num):
     Runs test_sequence.py for a single sequence.
     Returns (a_num, status, output_summary)
     """
+    global WORKER_CONTAINER_NAME
+    
     try:
-        # Run the test script
-        # We use the current sys.executable to ensure we use the same venv
-        cmd = [sys.executable, "test_sequence.py", a_num, "--timeout", str(TIMEOUT)]
+        if WORKER_CONTAINER_NAME:
+            # Docker Mode
+            # We use 'python3' assuming PATH is correctly set in the container to find it (host-bin or local)
+            cmd = [
+                "docker", "exec", 
+                WORKER_CONTAINER_NAME, 
+                "python3", "test_sequence.py", 
+                a_num, 
+                "--timeout", str(TIMEOUT)
+            ]
+        else:
+            # Local Mode
+            cmd = [sys.executable, "test_sequence.py", a_num, "--timeout", str(TIMEOUT)]
+
         result = subprocess.run(
             cmd,
             capture_output=True,
             text=True,
-            timeout=TIMEOUT + 2 # Buffer for process overhead
+            timeout=TIMEOUT + 2
         )
         
         output = result.stdout
         
-        # Determine status
         if "ERROR" in output:
             status = "ERROR"
         elif "FAIL" in output:
@@ -63,7 +84,6 @@ def test_sequence(a_num):
         else:
             status = "UNKNOWN"
             
-        # Create a one-line summary of the failure/error if applicable
         summary = ""
         if status != "PASS":
             for line in output.splitlines():
@@ -71,7 +91,11 @@ def test_sequence(a_num):
                     summary = line.strip()
                     break
             if not summary:
-                summary = output.strip().replace('\n', '; ')[:100]
+                # Capture stderr if stdout is empty/useless
+                if not output.strip() and result.stderr:
+                    summary = "STDERR: " + result.stderr.strip()[:100]
+                else:
+                    summary = output.strip().replace('\n', '; ')[:100]
         
         return (a_num, status, summary)
 
@@ -81,65 +105,84 @@ def test_sequence(a_num):
         return (a_num, "EXEC_ERROR", str(e))
 
 def main():
+    parser = argparse.ArgumentParser(description="Run OEIS Python tests.")
+    parser.add_argument("--docker", action="store_true", help="Run tests inside Docker container.")
+    parser.add_argument("--timeout", type=float, default=2.0, help="Timeout per sequence.")
+    parser.add_argument("--workers", type=int, default=WORKERS, help="Number of worker processes.")
+    args = parser.parse_args()
+
+    global TIMEOUT
+    TIMEOUT = args.timeout
+    workers_count = args.workers
+
+    if args.docker and DockerWorker is None:
+        print("Error: docker_manager.py not found. Cannot run in Docker mode.")
+        sys.exit(1)
+
     print(f"Scanning {PYTHON_PROGS_DIR} for sequences...")
     sequences = get_sequences()
     total = len(sequences)
     print(f"Found {total} sequences.")
-    print(f"Starting tests with {WORKERS} workers (timeout={TIMEOUT}s)...")
+    
+    mode_msg = "Docker Container" if args.docker else "Local Process"
+    print(f"Starting tests with {workers_count} workers ({mode_msg}, timeout={TIMEOUT}s)...")
     
     start_time = time.time()
     
-    # Results containers
-    results = {
-        "PASS": 0,
-        "FAIL": 0,
-        "ERROR": 0,
-        "SKIP": 0,
-        "TIMEOUT": 0,
-        "UNKNOWN": 0,
-        "EXEC_ERROR": 0
-    }
+    results = {k: 0 for k in ["PASS", "FAIL", "ERROR", "SKIP", "TIMEOUT", "UNKNOWN", "EXEC_ERROR"]}
     
-    failed_details = []
+    # Manager Context
+    worker_context = None
+    container_name = None
     
-    with open(REPORT_FILE, "w") as report_f, open(FAILURES_FILE, "w") as fail_f:
-        report_f.write(f"Test Run: {datetime.now()}\n")
-        report_f.write(f"Total Sequences: {total}\n")
-        report_f.write("-" * 40 + "\n")
-        
-        fail_f.write(f"Failures Report: {datetime.now()}\n")
-        fail_f.write("-" * 40 + "\n")
-        
-        with multiprocessing.Pool(processes=WORKERS) as pool:
-            # Use imap_unordered for responsiveness
-            for i, (a_num, status, summary) in enumerate(pool.imap_unordered(test_sequence, sequences), 1):
-                # Update stats
-                results[status] = results.get(status, 0) + 1
-                
-                # Console progress
-                sys.stdout.write(f"\r[{i}/{total}] {a_num}: {status.ljust(10)}")
-                sys.stdout.flush()
-                
-                # Log to report
-                report_f.write(f"{a_num}: {status} | {summary}\n")
-                
-                # Log failures
-                if status not in ["PASS", "SKIP"]:
-                    fail_f.write(f"{a_num}: {status} | {summary}\n")
-                    fail_f.flush() # Ensure partial writes are saved
+    try:
+        if args.docker:
+            # Initialize the shared container
+            # Using use_host_nix_store=True as requested/inferred
+            worker_context = DockerWorker(use_host_nix_store=True)
+            worker_context.start()
+            container_name = worker_context.container_name
+            print(f"Docker container started: {container_name}")
+
+        with open(REPORT_FILE, "w") as report_f, open(FAILURES_FILE, "w") as fail_f:
+            report_f.write(f"Test Run: {datetime.now()} (Mode: {mode_msg})\n")
+            report_f.write(f"Total Sequences: {total}\n")
+            report_f.write("-" * 40 + "\n")
+            fail_f.write(f"Failures Report: {datetime.now()}\n")
+            fail_f.write("-" * 40 + "\n")
+            
+            # Setup Pool with Initializer if Docker
+            init_args = (container_name,) if container_name else (None,)
+            
+            with multiprocessing.Pool(processes=workers_count, initializer=init_worker_process, initargs=init_args) as pool:
+                for i, (a_num, status, summary) in enumerate(pool.imap_unordered(test_sequence, sequences), 1):
+                    results[status] = results.get(status, 0) + 1
                     
-                # Periodic stats print
-                if i % 1000 == 0:
-                    report_f.flush()
+                    sys.stdout.write(f"\r[{i}/{total}] {a_num}: {status.ljust(10)}")
+                    sys.stdout.flush()
+                    
+                    report_f.write(f"{a_num}: {status} | {summary}\n")
+                    if status not in ["PASS", "SKIP"]:
+                        fail_f.write(f"{a_num}: {status} | {summary}\n")
+                        fail_f.flush()
+                        
+                    if i % 1000 == 0:
+                        report_f.flush()
+
+    except KeyboardInterrupt:
+        print("\nInterrupted by user.")
+    except Exception as e:
+        print(f"\nError: {e}")
+    finally:
+        if worker_context:
+            worker_context.stop()
 
     elapsed = time.time() - start_time
     print(f"\n\nDone in {elapsed:.2f} seconds.")
     print("Results:")
     for k, v in results.items():
         print(f"  {k}: {v}")
-        
     print(f"\nFull report written to {REPORT_FILE}")
-    print(f"Failures written to {FAILURES_FILE}")
 
 if __name__ == "__main__":
     main()

@@ -2,9 +2,10 @@ import os
 import re
 import ast
 import sys
+import config
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-SOURCE_DIR = os.path.join(SCRIPT_DIR, '..', 'oeisdata', 'seq')
+SOURCE_DIR = os.path.join(config.get_oeis_data_dir(), 'seq')
 RAW_DIR = os.path.join(SCRIPT_DIR, 'progs')
 SANITIZED_DIR = os.path.join(SCRIPT_DIR, 'sanitized')
 

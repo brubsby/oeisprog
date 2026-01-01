@@ -6,7 +6,9 @@ This document outlines the environment, tools, and conventions for the `oeisprog
 
 *   **`pythonprogs/`**: The main repository of Python scripts. Organized into buckets of 1000 (e.g., `A000/`, `A001/`).
     *   File path format: `pythonprogs/Axxx/Axxxxxx.py`.
-*   **`../oeisdata/seq/`**: (External) Raw OEIS data files (`.seq`) containing terms, offsets, and other metadata.
+*   **`oeisdata/seq/`**: (External) Raw OEIS data files (`.seq`) containing terms, offsets, and other metadata.
+    *   By default, this is expected to be a sibling directory (`../oeisdata`).
+    *   This location can be configured via the `OEISDATA_DIR` environment variable or `config.py`.
 *   **`test_sequence.py`**: The core testing framework. It loads the code, mocks `load_oeis_data`, and attempts to verify `a(n)`, `first(n)`, or `is(n)` against known terms.
 *   **`regression_tests.py`**: Runs a suite of tests against key sequences to prevent regressions in the testing and extraction tools.
 *   **`examine_sequence.py`**: The primary entry point for developers. It combines data fetching, code display, and testing into a single report.

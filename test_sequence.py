@@ -8,6 +8,7 @@ import io
 import ast
 import inspect
 import math
+import config
 
 def wrap_2d_candidate(func, strategy, offset):
     def wrapper(n):
@@ -45,7 +46,7 @@ def load_oeis_data(a_num):
         return None, None
 
     bucket = a_num[:4]
-    base_oeis_path = os.path.join('..', 'oeisdata', 'seq')
+    base_oeis_path = os.path.join(config.get_oeis_data_dir(), 'seq')
     seq_file_path = os.path.join(base_oeis_path, bucket, f"{a_num}.seq")
 
     if not os.path.exists(seq_file_path):

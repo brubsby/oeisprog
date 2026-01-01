@@ -4,6 +4,7 @@ import subprocess
 import sys
 import re
 import argparse
+import config
 
 def get_available_sequences(base_dir):
     sequences = set()
@@ -27,7 +28,7 @@ def get_sequences_from_stdin():
 
 def get_all_oeis_data_sequences():
     sequences = set()
-    base_dir = os.path.join('..', 'oeisdata', 'seq')
+    base_dir = os.path.join(config.get_oeis_data_dir(), 'seq')
     if not os.path.exists(base_dir):
         print(f"Warning: Data directory '{base_dir}' not found.")
         return sequences
@@ -54,7 +55,7 @@ def get_random_no_prog_sequence(python_seqs, max_attempts=5000):
             
         # Check if data exists
         bucket = a_num[:4]
-        path = os.path.join('..', 'oeisdata', 'seq', bucket, f"{a_num}.seq")
+        path = os.path.join(config.get_oeis_data_dir(), 'seq', bucket, f"{a_num}.seq")
         if not os.path.exists(path):
             continue
 

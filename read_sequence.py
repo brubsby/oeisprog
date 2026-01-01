@@ -2,6 +2,7 @@ import argparse
 import os
 import sys
 import re
+import config
 
 def main():
     parser = argparse.ArgumentParser(description="Read and print an OEIS sequence file.")
@@ -13,9 +14,9 @@ def main():
         print(f"Invalid A-number format: {a_num}. Expected format like A000045.", file=sys.stderr)
         sys.exit(1)
 
-    # Construct the path: ../oeisdata/seq/Axxx/Axxxxxx.seq
+    # Construct the path
     bucket = a_num[:4]
-    file_path = os.path.join('..', 'oeisdata', 'seq', bucket, f"{a_num}.seq")
+    file_path = os.path.join(config.get_oeis_data_dir(), 'seq', bucket, f"{a_num}.seq")
     
     if not os.path.exists(file_path):
         print(f"Sequence file not found: {file_path}", file=sys.stderr)
