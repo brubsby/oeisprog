@@ -10,6 +10,12 @@ import inspect
 import math
 import config
 
+# Disable integer string conversion limit for large numbers
+try:
+    sys.set_int_max_str_digits(0)
+except AttributeError:
+    pass # Python versions < 3.11 don't have this limit
+
 def wrap_2d_candidate(func, strategy, offset):
     def wrapper(n):
         idx = n - offset
@@ -107,14 +113,16 @@ class StubSequence:
         self._load()
         
         if self._terms is None:
-            return 0
+             raise IndexError(f"No data available for sequence {self.name}")
             
         if isinstance(n, int):
             idx = n - self._offset
             if 0 <= idx < len(self._terms):
                 return self._terms[idx]
+            else:
+                raise IndexError(f"Term {n} not found in {self.name} (available: {self._offset}..{self._offset + len(self._terms) - 1})")
         
-        return 0 
+        raise TypeError(f"Invalid argument type for {self.name}: {type(n)}") 
 
     def __repr__(self):
         return f"<Stub {self.name}>"
@@ -202,7 +210,7 @@ def run_b_file_generation(a_num, code, offset, timeout):
     start_time = time.time()
     n = offset
     count = 0
-    limit = 200 # Default limit
+    limit = 10000 # Default limit
     
     # Reset alarm for loop
     signal.alarm(max(1, int(timeout)))
@@ -445,16 +453,21 @@ def run_test_for_code(a_num, code, offset, expected_terms, timeout):
             finally:
                 signal.alarm(0)
 
-            if isinstance(res, (list, tuple)):
-                # It returns a list, so it's not a(n), it's likely first(n) or list(lim)
+            # DEBUG
+            # print(f"DEBUG: Probe result for {func_name}: type={type(res)}")
+
+            if isinstance(res, (list, tuple)) or (hasattr(res, '__iter__') and not isinstance(res, (str, bytes))):
+                # It returns a list or iterator, so it's not a(n), it's likely first(n) or list(lim)
                 # If we don't have a first_func yet, use this one
                 if not context.get('first'): 
                     if 'first' not in context:
                         first_func = a_func
                         first_func_name = func_name
                         a_func = None # Remove from a_func candidate
-        except Exception:
+    
+        except Exception as e:
             # If calling it failed, we can't determine. Let the main loop handle it.
+            # print(f"DEBUG: Probe failed: {e}")
             pass
 
     # Check for generators if no function or list found yet
@@ -550,7 +563,7 @@ def run_test_for_code(a_num, code, offset, expected_terms, timeout):
                     finally:
                         signal.alarm(0)
                     
-                    if isinstance(res, (list, tuple)):
+                    if isinstance(res, (list, tuple)) or (hasattr(res, '__iter__') and not isinstance(res, (str, bytes))):
                         is_list_result = True
                 except Exception:
                     pass
@@ -654,7 +667,8 @@ def run_test_for_code(a_num, code, offset, expected_terms, timeout):
             # 2. Continue generating terms until timeout if no failures yet
             if failures == 0 and not list_exhausted and not timed_out:
                 n = offset + len(expected_terms)
-                while time.time() - start_time <= timeout:
+                term_limit = 10000
+                while time.time() - start_time <= timeout and extra_terms < term_limit:
                     try:
                         val = a_func(n)
                         extra_terms += 1
@@ -679,27 +693,31 @@ def run_test_for_code(a_num, code, offset, expected_terms, timeout):
             
         if failures != -1:
             if failures == 0:
-                msg = f"PASS (checked {checked} terms"
-                if extra_terms > 0:
-                    msg += f" + {extra_terms} extra"
-                
-                if is_list_based and (checked == 0 or (list_exhausted and checked < len(expected_terms))):
-                     # Fallback logic for partial lists...
-                     if extra_terms == 0: # Only fallback if we didn't manage to go beyond
-                        run_guarded_fallback = True
-                        tests_run = False
-                     else:
-                        msg += f", list exhausted, took {duration:.3f}s)"
-                        report_messages.append(func_report + msg)
-                elif timed_out:
-                     msg += f", timed out after {duration:.3f}s)"
-                     report_messages.append(func_report + msg)
-                elif list_exhausted:
-                     msg += f", list exhausted, took {duration:.3f}s)"
+                if checked == 0 and len(expected_terms) > 0:
+                     msg = f"FAIL (checked 0 terms)"
                      report_messages.append(func_report + msg)
                 else:
-                     msg += f", took {duration:.3f}s)"
-                     report_messages.append(func_report + msg)
+                    msg = f"PASS (checked {checked} terms"
+                    if extra_terms > 0:
+                        msg += f" + {extra_terms} extra"
+                    
+                    if is_list_based and (checked == 0 or (list_exhausted and checked < len(expected_terms))):
+                         # Fallback logic for partial lists...
+                         if extra_terms == 0: # Only fallback if we didn't manage to go beyond
+                            run_guarded_fallback = True
+                            tests_run = False
+                         else:
+                            msg += f", list exhausted, took {duration:.3f}s)"
+                            report_messages.append(func_report + msg)
+                    elif timed_out:
+                         msg += f", timed out after {duration:.3f}s)"
+                         report_messages.append(func_report + msg)
+                    elif list_exhausted:
+                         msg += f", list exhausted, took {duration:.3f}s)"
+                         report_messages.append(func_report + msg)
+                    else:
+                         msg += f", took {duration:.3f}s)"
+                         report_messages.append(func_report + msg)
             else:
                 report_messages.append(func_report)
     else:
@@ -731,6 +749,12 @@ def run_test_for_code(a_num, code, offset, expected_terms, timeout):
             if len(expected_terms) >= k:
                 try:
                     res = first_func(k)
+                    if not isinstance(res, list):
+                        try:
+                            res = list(res)
+                        except TypeError:
+                            pass # Keep original res for error reporting
+                            
                     if isinstance(res, list):
                         match_len = min(len(res), len(expected_terms))
                         if res[:match_len] == expected_terms[:match_len]:
