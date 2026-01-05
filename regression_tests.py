@@ -7,6 +7,7 @@ SEQUENCES = ["A352687", "A320890", "A370447", "A359198", "A051064", "A208529", "
     "A056303", # Generates list in main block
     "A361745", # 2D array function, now wrapped automatically
     "A000370", # Complex logic, SymPy dependency, uses __main__ block
+    "A000002", # Kolakoski sequence (stdout check)
 ]
 
 def extract_and_verify(a_num):

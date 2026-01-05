@@ -525,33 +525,44 @@ def run_test_for_code(a_num, code, offset, expected_terms, timeout):
             candidate_name = candidates[0]
             candidate_func = context[candidate_name]
             
-            # Probe the candidate to see if it returns a list
-            is_list_result = False
+            # Check signature to ensure it accepts at least one argument (n)
+            has_args = False
             try:
-                probe_idx = offset + 1 if offset >= 0 else 1
-                signal.alarm(max(1, int(timeout)))
-                try:
-                    res = candidate_func(probe_idx)
-                except IndexError:
-                    res = candidate_func(10)
-                except Exception:
-                    res = None
-                finally:
-                    signal.alarm(0)
-                
-                if isinstance(res, (list, tuple)):
-                    is_list_result = True
-            except Exception:
-                pass
+                sig = inspect.signature(candidate_func)
+                if len(sig.parameters) > 0:
+                    has_args = True
+            except ValueError:
+                # Can't inspect (e.g. built-in), assume yes
+                has_args = True
             
-            if is_list_result:
-                if not first_func:
-                    first_func = candidate_func
-                    first_func_name = candidate_name
-            else:
-                # Only assign to a_func if it didn't look like a list generator
-                func_name = candidate_name
-                a_func = candidate_func
+            if has_args:
+                # Probe the candidate to see if it returns a list
+                is_list_result = False
+                try:
+                    probe_idx = offset + 1 if offset >= 0 else 1
+                    signal.alarm(max(1, int(timeout)))
+                    try:
+                        res = candidate_func(probe_idx)
+                    except IndexError:
+                        res = candidate_func(10)
+                    except Exception:
+                        res = None
+                    finally:
+                        signal.alarm(0)
+                    
+                    if isinstance(res, (list, tuple)):
+                        is_list_result = True
+                except Exception:
+                    pass
+                
+                if is_list_result:
+                    if not first_func:
+                        first_func = candidate_func
+                        first_func_name = candidate_name
+                else:
+                    # Only assign to a_func if it didn't look like a list generator
+                    func_name = candidate_name
+                    a_func = candidate_func
 
     # Check for 2D function requiring wrapper
     if a_func and callable(a_func) and not is_list_based:
