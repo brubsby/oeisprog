@@ -5,9 +5,10 @@ import subprocess
 import re
 
 def main():
-    parser = argparse.ArgumentParser(description="Open the extracted script for an OEIS sequence in your EDITOR.")
+    parser = argparse.ArgumentParser(description="Open the extracted script for an OEIS sequence in your EDITOR or a REPL.")
     parser.add_argument("a_number", help="The OEIS A-number (e.g., A000045).")
     parser.add_argument("extra_args", nargs='*', help="Language and/or index (e.g., 'python 2' or just '2' or 'mathematica').")
+    parser.add_argument("--repl", action="store_true", help="Print the code and open a REPL for the language.")
     args = parser.parse_args()
 
     a_num = args.a_number
@@ -52,6 +53,63 @@ def main():
         sys.exit(1)
 
     abs_path = os.path.abspath(os.path.join(dir_path, target_file))
+
+    if args.repl:
+        # Print the code
+        print(f"--- Code for {target_file} ---")
+        try:
+            with open(abs_path, 'r') as f:
+                print(f.read())
+        except Exception as e:
+            print(f"Error reading file: {e}", file=sys.stderr)
+            sys.exit(1)
+        print("-" * (14 + len(target_file)))
+
+        # REPL mapping
+        # Each entry is a list of args. The file path will be appended or substituted.
+        repl_cmds = {
+            "python": [sys.executable, "-i"],
+            "pari": ["gp"],
+            "mathematica": ["wolframscript", "-i", "-file"], 
+            "gap": ["gap"],
+            "maple": ["maple"],
+            "magma": ["magma"],
+            "maxima": ["maxima"],
+            "sagemath": ["sage"],
+            "julia": ["julia", "-i"],
+            "haskell": ["ghci"],
+            "scala": ["scala"],
+            "axiom": ["fricas", "-nosman", "-eval", f')read "{abs_path}"'],
+            "fricas": ["fricas", "-nosman", "-eval", f')read "{abs_path}"'],
+            "scheme": ["guile", "-l"],
+            "guile": ["guile", "-l"],
+            "perl": ["perl", "-d"],    # Perl debugger
+            "ruby": ["irb", "-r"],     # irb for interactive ruby
+            "r": ["R", "--interactive", "--file"],
+        }
+
+        cmd_template = repl_cmds.get(lang.lower())
+        if not cmd_template:
+            print(f"No REPL command known for language '{lang}'. Trying to run it as a command...")
+            full_cmd = [lang.lower(), abs_path]
+        else:
+            # If the template already contains the path (e.g. FriCAS), don't append it
+            if any(abs_path in arg for arg in cmd_template):
+                full_cmd = cmd_template
+            else:
+                full_cmd = cmd_template + [abs_path]
+        
+        print(f"Launching REPL: {' '.join(full_cmd)}")
+        try:
+            # We use subprocess.run without piping to allow full terminal interaction
+            subprocess.run(full_cmd)
+        except FileNotFoundError:
+            print(f"Error: REPL command '{full_cmd[0]}' not found in PATH.", file=sys.stderr)
+            sys.exit(1)
+        except Exception as e:
+            print(f"Error launching REPL: {e}", file=sys.stderr)
+            sys.exit(1)
+        return
 
     editor = os.environ.get('EDITOR')
     if not editor:
