@@ -400,12 +400,21 @@ def run_test_for_code(a_num, code, offset, expected_terms, timeout):
              a_func = candidate
              func_name = a_num
              
-    elif f"{a_num}_list" in context:
-        obj = context[f"{a_num}_list"]
+    # Check for list candidates
+    list_candidate_name = None
+    possible_list_names = [f"{a_num}_list", f"{a_num}List", f"{a_num}list", f"{a_num}_List"]
+    for name in possible_list_names:
+        if name in context:
+            list_candidate_name = name
+            break
+            
+    if list_candidate_name:
+        name = list_candidate_name
+        obj = context[name]
         if isinstance(obj, list):
             # Support for list based generation (e.g. Axxxxxx_list = [...])
             the_list = obj
-            func_name = f"{a_num}_list"
+            func_name = name
             is_list_based = True
             # Define a closure to access the list safely
             def list_accessor(n):
@@ -414,6 +423,12 @@ def run_test_for_code(a_num, code, offset, expected_terms, timeout):
                     return the_list[idx]
                 raise IndexError(f"Index {n} (offset {offset}) out of range for list of length {len(the_list)}")
             a_func = list_accessor
+        elif callable(obj):
+             # It's a function named AxxxxxxList or Axxxxxx_list
+             # Assume it's a first(n) function
+             first_func = obj
+             first_func_name = name
+             # Do not assign to a_func
         elif hasattr(obj, '__next__') or hasattr(obj, '__iter__'):
              # Support for generator based lists (from AST transform)
              if hasattr(obj, '__iter__') and not hasattr(obj, '__next__'):
@@ -422,7 +437,7 @@ def run_test_for_code(a_num, code, offset, expected_terms, timeout):
                  gen_iter = obj
              
              gen_cache = []
-             func_name = f"{a_num}_list"
+             func_name = name
              
              def gen_accessor_list(n):
                  target_idx = n - offset
