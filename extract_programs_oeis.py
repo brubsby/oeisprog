@@ -354,6 +354,14 @@ def split_legacy_program(code_block):
         
     return programs
 
+def is_code_empty(code):
+    lines = code.splitlines()
+    for line in lines:
+        s = line.strip()
+        if s and not s.startswith('#'):
+            return False
+    return True
+
 def process_file(file_path, a_num):
     programs = extract_programs_from_file(file_path)
     if not programs:
@@ -372,6 +380,9 @@ def process_file(file_path, a_num):
         if not code:
             continue
             
+        if lang == 'Python' and is_code_empty(code):
+            continue
+
         # Handle Legacy Splitting
         if lang in ['Maple', 'Mathematica']:
             sub_programs = split_legacy_program(code)
@@ -381,6 +392,9 @@ def process_file(file_path, a_num):
         for sub_code in sub_programs:
             sub_code = sub_code.strip()
             if not sub_code:
+                continue
+            
+            if lang == 'Python' and is_code_empty(sub_code):
                 continue
                 
             counters[lang] = counters.get(lang, 0) + 1
