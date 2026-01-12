@@ -25,7 +25,7 @@ def wrap_2d_candidate(func, strategy, offset):
             # Square array read by antidiagonals: (0,0), (0,1), (1,0), (0,2), (1,1), (2,0)...
             # d is diagonal index. T_d = d*(d+1)/2.
             # idx = T_d + k.
-            # w = floor((sqrt(8*idx + 1) - 1) / 2)
+            # w = floor((math.sqrt(8 * idx + 1) - 1) / 2)
             w = math.floor((math.sqrt(8 * idx + 1) - 1) / 2)
             t = w * (w + 1) // 2
             k = idx - t
@@ -139,15 +139,83 @@ def compare_lists(expected, got):
 def code_filename_hint(a_num):
     return f"<oeis_code_{a_num}>"
 
-def run_b_file_generation(a_num, code, offset, timeout):
-    # Prepare context with stubs
+def load_dependency(a_num, context, visited=None, depth=0):
+    """
+    Recursively loads dependencies for a given A-number.
+    1. Tries to find and execute python code for the sequence.
+    2. Fallbacks to StubSequence if no code found.
+    """
+    if visited is None:
+        visited = set()
+    
+    if a_num in visited:
+        return
+    visited.add(a_num)
+    
+    if depth > 5: # Safety limit
+        if a_num not in context:
+            context[a_num] = StubSequence(a_num)
+        return
+
+    bucket = a_num[:4]
+    # Assuming 'sanitized' is in the current working directory as per structure
+    script_dir = os.path.join('sanitized', bucket, a_num)
+    
+    code_found = False
+    
+    if os.path.exists(script_dir):
+        try:
+            files = sorted([f for f in os.listdir(script_dir) if f.startswith(f"{a_num}_python") and f.endswith('.py')])
+            if files:
+                # Use the first file found as the canonical implementation for dependency
+                dep_path = os.path.join(script_dir, files[0])
+                with open(dep_path, 'r') as f:
+                    dep_code = f.read()
+                
+                # Pre-scan for deeper dependencies
+                sub_ids = set(re.findall(r'A\d{6}', dep_code))
+                for sub_id in sub_ids:
+                    if sub_id != a_num:
+                         load_dependency(sub_id, context, visited, depth + 1)
+
+                # Prepare a separate context for the library to avoid pollution, but we want 
+                # its exports to be available.
+                lib_context = context.copy()
+                lib_context['__name__'] = 'oeis_lib'
+                
+                # Execute
+                exec(dep_code, lib_context)
+                
+                # Merge relevant symbols back to main context
+                for k, v in lib_context.items():
+                    if k == '__name__' or k == '__builtins__':
+                        continue
+                    # We want to export functions, classes, and variables that might be needed.
+                    # Especially those starting with A... or common utility names if not conflicting.
+                    if k not in context or isinstance(context.get(k), StubSequence):
+                         context[k] = v
+                
+                code_found = True
+        except Exception as e:
+            pass
+
+    if not code_found and a_num not in context:
+        context[a_num] = StubSequence(a_num)
+
+def prepare_context_with_dependencies(code, main_a_num):
     context = {}
     found_ids = set(re.findall(r'A\d{6}', code))
-    if a_num in found_ids:
-        found_ids.remove(a_num)
+    if main_a_num in found_ids:
+        found_ids.remove(main_a_num)
         
     for aid in found_ids:
-        context[aid] = StubSequence(aid)
+        load_dependency(aid, context)
+        
+    return context
+
+def run_b_file_generation(a_num, code, offset, timeout):
+    # Prepare context
+    context = prepare_context_with_dependencies(code, a_num)
 
     # Timeout setup
     signal.signal(signal.SIGALRM, timeout_handler)
@@ -243,15 +311,8 @@ def run_b_file_generation(a_num, code, offset, timeout):
 def run_test_for_code(a_num, code, offset, expected_terms, timeout):
     report_messages = []
     
-    # Prepare context with stubs
-    context = {}
-    found_ids = set(re.findall(r'A\d{6}', code))
-    # Do not stub the sequence itself
-    if a_num in found_ids:
-        found_ids.remove(a_num)
-        
-    for aid in found_ids:
-        context[aid] = StubSequence(aid)
+    # Prepare context with stubs and dependencies
+    context = prepare_context_with_dependencies(code, a_num)
 
     # Capture stdout
     captured_output = io.StringIO()
