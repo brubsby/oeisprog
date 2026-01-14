@@ -700,6 +700,7 @@ def run_test_for_code(a_num, code, offset, expected_terms, timeout):
         
         timed_out = False
         list_exhausted = False
+        recursion_hit = False
         
         # Set alarm for the entire test loop
         loop_alarm = max(1, int(timeout))
@@ -760,6 +761,8 @@ def run_test_for_code(a_num, code, offset, expected_terms, timeout):
 
         except TimeoutError:
             timed_out = True
+        except RecursionError:
+            recursion_hit = True
         except Exception as e:
             report_messages.append(f"  Function '{func_name}(n)': ERROR: {e}")
             failures = -1
@@ -787,6 +790,9 @@ def run_test_for_code(a_num, code, offset, expected_terms, timeout):
                             report_messages.append(func_report + msg)
                     elif timed_out:
                          msg += f", timed out after {duration:.3f}s)"
+                         report_messages.append(func_report + msg)
+                    elif recursion_hit:
+                         msg += f", hit recursion depth after {duration:.3f}s)"
                          report_messages.append(func_report + msg)
                     elif list_exhausted:
                          msg += f", list exhausted, took {duration:.3f}s)"
