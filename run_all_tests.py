@@ -76,6 +76,8 @@ def test_sequence(a_num):
         
         if "ERROR" in output:
             status = "ERROR"
+        elif "possible offset issue" in output:
+            status = "OFFSET"
         elif "FAIL" in output:
             status = "FAIL"
         elif "PASS" in output:
@@ -88,7 +90,10 @@ def test_sequence(a_num):
         summary = ""
         if status != "PASS":
             for line in output.splitlines():
-                if status in line:
+                if status == "OFFSET" and "possible offset issue" in line:
+                    summary = line.strip()
+                    break
+                elif status in line:
                     summary = line.strip()
                     break
             if not summary:
@@ -156,7 +161,7 @@ def main():
     
     start_time = time.time()
     
-    results = {k: 0 for k in ["PASS", "FAIL", "ERROR", "SKIP", "TIMEOUT", "UNKNOWN", "EXEC_ERROR"]}
+    results = {k: 0 for k in ["PASS", "FAIL", "ERROR", "SKIP", "TIMEOUT", "UNKNOWN", "EXEC_ERROR", "OFFSET"]}
     
     # Manager Context
     worker_context = None
@@ -196,7 +201,7 @@ def main():
                         fail_f.write(f"{a_num}: {status} | {summary}\n")
                         fail_f.flush()
                         
-                        if args.first_failure:
+                        if args.first_failure and status != "OFFSET":
                             print(f"\nFirst failure encountered: {a_num} ({status})")
                             print(f"Summary: {summary}")
                             pool.terminate()

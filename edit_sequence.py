@@ -132,5 +132,35 @@ def main():
         print(f"Error launching editor: {e}", file=sys.stderr)
         sys.exit(1)
 
+    # Auto-sanitize for Python
+    if lang.lower() == 'python':
+        print(f"Sanitizing {target_file}...")
+        try:
+            import extract_programs_oeis
+            
+            with open(abs_path, 'r') as f:
+                code = f.read()
+            
+            sanitized_code, success = extract_programs_oeis.sanitize_code(code)
+            
+            if success:
+                # Construct sanitized path
+                # sanitized/Axxx/Axxxxxx/filename
+                sanitized_dir = os.path.join('sanitized', bucket, a_num)
+                if not os.path.exists(sanitized_dir):
+                    os.makedirs(sanitized_dir)
+                    
+                sanitized_path = os.path.join(sanitized_dir, target_file)
+                with open(sanitized_path, 'w') as f:
+                    f.write(sanitized_code)
+                print(f"  -> Written to {sanitized_path}")
+            else:
+                print("  [ERROR] Sanitization failed (syntax error or invalid AST).")
+                
+        except ImportError:
+            print("Error: Could not import 'extract_programs_oeis'. Make sure it is in the same directory.")
+        except Exception as e:
+            print(f"Error during refresh: {e}")
+
 if __name__ == "__main__":
     main()
