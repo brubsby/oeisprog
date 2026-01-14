@@ -464,6 +464,22 @@ def run_test_for_code(a_num, code, offset, expected_terms, timeout):
              # Built-ins might not have signature
              a_func = candidate
              func_name = 'a'
+
+    elif 'a' in context and not isinstance(context['a'], (list, tuple)) and hasattr(context['a'], '__getitem__'):
+        # Support for map-like objects (dict, Counter, etc.) named 'a'
+        obj = context['a']
+        def map_accessor(n):
+            try:
+                return obj[n]
+            except KeyError:
+                # Treat missing key as end of sequence? Or 0?
+                # For sparse sequences (Counter), 0 is often implied.
+                # But for finite computed dicts, it implies missing data.
+                # Let's try returning the value, if it fails, it fails.
+                # But Counter doesn't raise KeyError.
+                return obj[n]
+        a_func = map_accessor
+        func_name = 'a (map)'
              
     # Check for list candidates
     list_candidate_name = None
