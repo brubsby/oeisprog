@@ -195,6 +195,10 @@ def load_dependency(a_num, context, visited=None, depth=0):
                     if k not in context or isinstance(context.get(k), StubSequence):
                          context[k] = v
                 
+                # Heuristic: If the dependency defines 'a' but not 'Axxxxxx', alias it.
+                if a_num not in context and 'a' in lib_context:
+                    context[a_num] = lib_context['a']
+
                 code_found = True
         except Exception as e:
             pass
@@ -430,7 +434,22 @@ def run_test_for_code(a_num, code, offset, expected_terms, timeout):
     gen_name = None
     is_list_based = False
     
-    if 'a' in context and callable(context['a']):
+    if a_num in context and callable(context[a_num]):
+        candidate = context[a_num]
+        try:
+            sig = inspect.signature(candidate)
+            if len(sig.parameters) == 0:
+                 # 0 args: likely a generator factory
+                gen_func = candidate
+                gen_name = a_num
+            else:
+                a_func = candidate
+                func_name = a_num
+        except ValueError:
+             a_func = candidate
+             func_name = a_num
+
+    elif 'a' in context and callable(context['a']):
         candidate = context['a']
         try:
             sig = inspect.signature(candidate)
@@ -445,21 +464,6 @@ def run_test_for_code(a_num, code, offset, expected_terms, timeout):
              # Built-ins might not have signature
              a_func = candidate
              func_name = 'a'
-             
-    elif a_num in context and callable(context[a_num]):
-        candidate = context[a_num]
-        try:
-            sig = inspect.signature(candidate)
-            if len(sig.parameters) == 0:
-                 # 0 args: likely a generator factory
-                gen_func = candidate
-                gen_name = a_num
-            else:
-                a_func = candidate
-                func_name = a_num
-        except ValueError:
-             a_func = candidate
-             func_name = a_num
              
     # Check for list candidates
     list_candidate_name = None

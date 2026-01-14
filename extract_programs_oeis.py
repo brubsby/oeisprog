@@ -90,6 +90,8 @@ def sanitize_code(source_code):
             guard_nodes.append(node)
 
     if not guard_nodes:
+        if keep_nodes:
+            return source_code, True
         return source_code, False
 
     if guard_nodes:
