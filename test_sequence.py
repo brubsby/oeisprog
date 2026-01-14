@@ -793,8 +793,12 @@ def run_test_for_code(a_num, code, offset, expected_terms, timeout):
         if failures != -1:
             if failures == 0:
                 if checked == 0 and len(expected_terms) > 0:
-                     msg = f"FAIL (checked 0 terms)"
-                     report_messages.append(func_report + msg)
+                     if is_list_based:
+                         run_guarded_fallback = True
+                         tests_run = False
+                     else:
+                         msg = f"FAIL (checked 0 terms)"
+                         report_messages.append(func_report + msg)
                 else:
                     msg = f"PASS (checked {checked} terms"
                     if extra_terms > 0:
