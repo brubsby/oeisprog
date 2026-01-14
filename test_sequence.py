@@ -536,7 +536,7 @@ def run_test_for_code(a_num, code, offset, expected_terms, timeout):
                 # It returns a list or iterator, so it's not a(n), it's likely first(n) or list(lim)
                 # If we don't have a first_func yet, use this one
                 if not context.get('first'): 
-                    if 'first' not in context:
+                    if 'first' not in context: 
                         first_func = a_func
                         first_func_name = func_name
                         a_func = None # Remove from a_func candidate
@@ -850,25 +850,57 @@ def run_test_for_code(a_num, code, offset, expected_terms, timeout):
 
     # 3. Test is(n)
     is_func = None
-    for k, v in context.items():
-        if k == 'is_seq' or k == f'is_{a_num}' or k == 'ok':
-            if callable(v):
-                try:
-                    sig = inspect.signature(v)
-                    # Count required arguments
-                    required_args = 0
-                    for p in sig.parameters.values():
-                        if p.default == inspect.Parameter.empty and p.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD):
-                            required_args += 1
-                    
-                    if required_args == 1:
-                        is_func = v
-                        break
-                except (ValueError, TypeError):
-                    # If we can't inspect signature (e.g. built-in), optimistically assume it's valid if named explicitly
-                    is_func = v
+    priority_names = ['is_seq', f'is_{a_num}', 'ok']
+    
+    # First pass: Check priority names
+    for name in priority_names:
+        if name in context and callable(context[name]):
+            candidate = context[name]
+            # Verify signature if possible
+            try:
+                sig = inspect.signature(candidate)
+                required_args = 0
+                for p in sig.parameters.values():
+                    if p.default == inspect.Parameter.empty and p.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD):
+                        required_args += 1
+                
+                if required_args == 1:
+                    is_func = candidate
                     break
+            except (ValueError, TypeError):
+                # Assume yes if we can't inspect (legacy behavior for priorities)
+                is_func = candidate
+                break
             
+    # Second pass: If not found, look for any function starting with 'is'
+    if not is_func:
+        candidates = []
+        for name, obj in context.items():
+            if callable(obj) and not isinstance(obj, StubSequence) and name != '__builtins__':
+                 if (name.startswith('is') or name.startswith('Is')) and name != 'islice':
+                     # Exclude if it's already in priority names
+                     if name not in priority_names:
+                         # Check module to prioritize defined functions over imported ones
+                         mod = getattr(obj, '__module__', None)
+                         if mod == 'oeis_module' or mod is None:
+                             candidates.append(obj)
+        
+        # If there is exactly one such candidate, assume it is the is(n) function
+        if len(candidates) == 1:
+            candidate = candidates[0]
+            # Verify signature requires 1 arg
+            try:
+                sig = inspect.signature(candidate)
+                required_args = 0
+                for p in sig.parameters.values():
+                    if p.default == inspect.Parameter.empty and p.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD):
+                        required_args += 1
+                if required_args == 1:
+                    is_func = candidate
+            except (ValueError, TypeError):
+                 # Assume yes if we can't inspect
+                 pass
+
     if is_func and callable(is_func):
         tests_run = True
         func_report = f"  Function 'is(n)': "

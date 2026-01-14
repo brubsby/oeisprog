@@ -20,7 +20,7 @@ def extract_and_verify(a_num):
     print(f"[{a_num}] Extracting...", end="", flush=True)
     try:
         result = subprocess.run(
-            ["python3", "extract_programs_oeis.py", a_num],
+            [sys.executable, "extract_programs_oeis.py", a_num],
             capture_output=True,
             text=True,
             timeout=10
