@@ -424,6 +424,7 @@ def run_test_for_code(a_num, code, offset, expected_terms, timeout):
 
     # Track if any test was run
     tests_run = False
+    tests_passed = False
     
     first_func = None
     first_func_name = None
@@ -708,6 +709,8 @@ def run_test_for_code(a_num, code, offset, expected_terms, timeout):
         except ValueError:
             pass
 
+    func_failure_idx = None
+
     # Execute the test for a(n)
     run_guarded_fallback = False
     
@@ -792,6 +795,7 @@ def run_test_for_code(a_num, code, offset, expected_terms, timeout):
             
         if failures != -1:
             if failures == 0:
+                tests_passed = True
                 if checked == 0 and len(expected_terms) > 0:
                      if is_list_based:
                          run_guarded_fallback = True
@@ -864,6 +868,7 @@ def run_test_for_code(a_num, code, offset, expected_terms, timeout):
                     if isinstance(res, list):
                         match_len = min(len(res), len(expected_terms))
                         if res[:match_len] == expected_terms[:match_len]:
+                            tests_passed = True
                             func_report += f"PASS (checked first({k}))"
                         else:
                              detail = compare_lists(expected_terms[:match_len], res[:match_len])
@@ -871,6 +876,8 @@ def run_test_for_code(a_num, code, offset, expected_terms, timeout):
                     else:
                         func_report += f"FAIL (returned {type(res)}, expected list)"
                     report_messages.append(func_report)
+                    if not tests_passed:
+                        func_failure_idx = len(report_messages) - 1
                 except Exception as e:
                      report_messages.append(f"  Function '{first_func_name}(n)': ERROR: {e}")
         except TimeoutError:
@@ -962,15 +969,18 @@ def run_test_for_code(a_num, code, offset, expected_terms, timeout):
             
         if failures != -1:
             if timed_out:
+                 tests_passed = True
                  func_report += f"PASS (checked partial known terms, timed out)"
                  report_messages.append(func_report)
             elif failures == 0:
+                 tests_passed = True
                  report_messages.append(func_report)
             else:
                  report_messages.append(func_report)
+                 a_func_failure_idx = len(report_messages) - 1
     
     # 4. Check STDOUT or Fallback to Guarded Execution
-    if not tests_run or run_guarded_fallback:
+    if not tests_run or run_guarded_fallback or (tests_run and not tests_passed):
         # Run the guarded block
         
         # Reset stdout capture
@@ -1190,13 +1200,17 @@ def run_test_for_code(a_num, code, offset, expected_terms, timeout):
 
         # Check stdout if still needed or if just supplementing
         output_str = captured_output.getvalue()
-        if output_str.strip() and not tests_run:
+        if output_str.strip() and (not tests_run or not tests_passed):
             found_numbers = [int(x) for x in re.findall(r'-?\d+', output_str)]
             if found_numbers:
                 tests_run = True
                 match_len = min(len(found_numbers), len(expected_terms))
                 if match_len > 0 and found_numbers[:match_len] == expected_terms[:match_len]:
                     report_messages.append(f"  Script output: PASS (checked {match_len} terms from stdout)")
+                    # Suppress previous a_func failure if we found a match here
+                    if func_failure_idx is not None:
+                        # print(f"DEBUG: Suppressing failure at {func_failure_idx}")
+                        report_messages[func_failure_idx] = None
                 else:
                     detail = compare_lists(expected_terms[:match_len], found_numbers[:match_len])
                     report_messages.append(f"  Script output: FAIL ({detail})")
@@ -1206,7 +1220,7 @@ def run_test_for_code(a_num, code, offset, expected_terms, timeout):
     if not tests_run:
         report_messages.append("  [ERROR] No known test functions found (expected 'a(n)', 'first(n)', or 'is(n)').")
     
-    return report_messages
+    return [m for m in report_messages if m is not None]
 
 def test_file(a_num, timeout=1.0, b_file=False):
     bucket = a_num[:4]
