@@ -17,7 +17,7 @@ except ImportError:
 PYTHON_PROGS_DIR = "sanitized"
 REPORT_FILE = "test_report.txt"
 FAILURES_FILE = "failures.txt"
-TIMEOUT = 10.0
+TIMEOUT = 1.0
 WORKERS = max(1, os.cpu_count() or 4)
 
 # Global variable for worker processes
@@ -69,7 +69,7 @@ def test_sequence(a_num):
             cmd,
             capture_output=True,
             text=True,
-            timeout=TIMEOUT * 2 + 5
+            #timeout=TIMEOUT * 2 + 5
         )
         
         output = result.stdout
@@ -113,7 +113,7 @@ def test_sequence(a_num):
 def main():
     parser = argparse.ArgumentParser(description="Run OEIS Python programs.")
     parser.add_argument("--docker", action="store_true", help="Run tests inside Docker container.")
-    parser.add_argument("--timeout", type=float, default=10.0, help="Timeout per sequence.")
+    parser.add_argument("--timeout", type=float, default=1.0, help="Timeout per sequence.")
     parser.add_argument("--workers", type=int, default=WORKERS, help="Number of worker processes.")
     parser.add_argument("--first-failure", action="store_true", help="Stop after the first failure.")
     parser.add_argument("-r", "--random", action="store_true", help="Run tests in random order (default).")

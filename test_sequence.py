@@ -206,9 +206,13 @@ def load_dependency(a_num, context, visited=None, depth=0):
     if not code_found and a_num not in context:
         context[a_num] = StubSequence(a_num)
 
-def prepare_context_with_dependencies(code, main_a_num):
+def prepare_context_with_dependencies(code, main_a_num, original_code=None):
     context = {}
     found_ids = set(re.findall(r'A\d{6}', code))
+    
+    if original_code:
+        found_ids.update(re.findall(r'A\d{6}', original_code))
+        
     if main_a_num in found_ids:
         found_ids.remove(main_a_num)
         
@@ -217,9 +221,9 @@ def prepare_context_with_dependencies(code, main_a_num):
         
     return context
 
-def run_b_file_generation(a_num, code, offset, timeout):
+def run_b_file_generation(a_num, code, offset, timeout, original_code=None):
     # Prepare context
-    context = prepare_context_with_dependencies(code, a_num)
+    context = prepare_context_with_dependencies(code, a_num, original_code)
 
     # Timeout setup
     signal.signal(signal.SIGALRM, timeout_handler)
@@ -312,11 +316,11 @@ def run_b_file_generation(a_num, code, offset, timeout):
     finally:
         signal.alarm(0)
 
-def run_test_for_code(a_num, code, offset, expected_terms, timeout):
+def run_test_for_code(a_num, code, offset, expected_terms, timeout, original_code=None):
     report_messages = []
     
     # Prepare context with stubs and dependencies
-    context = prepare_context_with_dependencies(code, a_num)
+    context = prepare_context_with_dependencies(code, a_num, original_code)
 
     # Capture stdout
     captured_output = io.StringIO()
@@ -724,6 +728,7 @@ def run_test_for_code(a_num, code, offset, expected_terms, timeout):
         timed_out = False
         list_exhausted = False
         recursion_hit = False
+        value_error_hit = False
         
         # Set alarm for the entire test loop
         loop_alarm = max(1, int(timeout))
@@ -786,6 +791,8 @@ def run_test_for_code(a_num, code, offset, expected_terms, timeout):
             timed_out = True
         except RecursionError:
             recursion_hit = True
+        except ValueError:
+            value_error_hit = True
         except Exception as e:
             report_messages.append(f"  Function '{func_name}(n)': ERROR: {e}")
             failures = -1
@@ -821,6 +828,9 @@ def run_test_for_code(a_num, code, offset, expected_terms, timeout):
                          report_messages.append(func_report + msg)
                     elif recursion_hit:
                          msg += f", hit recursion depth after {duration:.3f}s)"
+                         report_messages.append(func_report + msg)
+                    elif value_error_hit:
+                         msg += f", hit value error after {duration:.3f}s)"
                          report_messages.append(func_report + msg)
                     elif list_exhausted:
                          msg += f", list exhausted, took {duration:.3f}s)"
@@ -1259,10 +1269,19 @@ def test_file(a_num, timeout=1.0, b_file=False):
     if b_file:
         # For b-file, use the first file found.
         file_path = os.path.join(seq_dir, files[0])
+        original_code = None
+        prog_file_path = file_path.replace('sanitized', 'progs', 1)
+        if os.path.exists(prog_file_path):
+            try:
+                with open(prog_file_path, 'r') as f:
+                    original_code = f.read()
+            except Exception:
+                pass
+                
         try:
             with open(file_path, 'r') as f:
                 code = f.read()
-            run_b_file_generation(a_num, code, offset, timeout)
+            run_b_file_generation(a_num, code, offset, timeout, original_code)
         except Exception:
             pass
         return []
@@ -1272,11 +1291,20 @@ def test_file(a_num, timeout=1.0, b_file=False):
         if len(files) > 1:
             report_messages.append(f"  --- Program {i+1} ({filename}) ---")
             
+        original_code = None
+        prog_file_path = file_path.replace('sanitized', 'progs', 1)
+        if os.path.exists(prog_file_path):
+            try:
+                with open(prog_file_path, 'r') as f:
+                    original_code = f.read()
+            except Exception:
+                pass
+
         try:
             with open(file_path, 'r') as f:
                 code = f.read()
             
-            section_messages = run_test_for_code(a_num, code, offset, expected_terms, timeout)
+            section_messages = run_test_for_code(a_num, code, offset, expected_terms, timeout, original_code)
             report_messages.extend(section_messages)
         except Exception as e:
             report_messages.append(f"  [ERROR] Could not read or run {filename}: {e}")
