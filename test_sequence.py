@@ -683,12 +683,12 @@ def run_test_for_code(a_num, code, offset, expected_terms, timeout, original_cod
         try:
             sig = inspect.signature(a_func)
             params = [p for p in sig.parameters.values() if p.default == inspect.Parameter.empty and p.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)]
-            if len(params) == 2:
-                # 2D function detected. Probe strategies.
+            if len(params) > 1:
+                # Potential 2D function. Only accept if it matches a 2D strategy.
                 strategies = ['antidiag', 'triangle']
                 best_wrapper = None
                 
-                if expected_terms and len(expected_terms) >= 3:
+                if len(params) == 2 and expected_terms and len(expected_terms) >= 3:
                     for strat in strategies:
                         wrapper = wrap_2d_candidate(a_func, strat, offset)
                         match = True
@@ -710,6 +710,8 @@ def run_test_for_code(a_num, code, offset, expected_terms, timeout, original_cod
                 
                 if best_wrapper:
                     a_func = best_wrapper
+                else:
+                    a_func = None
         except ValueError:
             pass
 
@@ -757,13 +759,27 @@ def run_test_for_code(a_num, code, offset, expected_terms, timeout, original_cod
 
                 if val != expected_terms[i]:
                     msg_extra = ""
+                    
+                    # Check if val matches neighbors in expected_terms
+                    if i + 1 < len(expected_terms) and val == expected_terms[i+1]:
+                         msg_extra += " (val matches expected[n+1], possible offset issue)"
+                    if i - 1 >= 0 and val == expected_terms[i-1]:
+                         msg_extra += " (val matches expected[n-1], possible offset issue)"
+
                     try:
+                        # Check if a_func is shifted relative to n (forward)
                         if a_func(n+1) == expected_terms[i]:
-                            msg_extra = " (matches n+1, possible offset issue)"
-                        elif a_func(n-1) == expected_terms[i]:
-                            msg_extra = " (matches n-1, possible offset issue)"
+                            msg_extra += " (a(n+1) matches expected, possible offset issue)"
                     except Exception:
                         pass
+
+                    try:
+                        # Check if a_func is shifted relative to n (backward)
+                        if a_func(n-1) == expected_terms[i]:
+                            msg_extra += " (a(n-1) matches expected, possible offset issue)"
+                    except Exception:
+                        pass
+                    
                     func_report += f"FAIL at n={n}: expected {expected_terms[i]}, got {val}{msg_extra}"
                     failures += 1
                     break
