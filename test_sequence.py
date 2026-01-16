@@ -357,26 +357,62 @@ def run_test_for_code(a_num, code, offset, expected_terms, timeout, original_cod
                             )
                             ast.fix_missing_locations(node.value)
                             break # Only modify the value once
-            elif isinstance(node, ast.If):
-                # Check for "if __name__ == '__main__':"
-                is_main = False
-                try:
-                    if (isinstance(node.test, ast.Compare) and 
-                        isinstance(node.test.left, ast.Name) and node.test.left.id == '__name__' and
-                        isinstance(node.test.ops[0], ast.Eq)):
-                         # Check comparators
-                        comp = node.test.comparators[0]
-                        val = None
-                        if isinstance(comp, ast.Constant):
-                            val = comp.value
-                        elif hasattr(ast, 'Str') and isinstance(comp, ast.Str):
-                            val = comp.s
-                        if val == '__main__':
-                            is_main = True
-                except Exception:
-                    pass
-
+                        elif isinstance(node, ast.If):
+                            # Check for "if __name__ == '__main__':"
+                            is_main = False
+                            try:
+                                if (isinstance(node.test, ast.Compare) and 
+                                    isinstance(node.test.left, ast.Name) and node.test.left.id == '__name__' and
+                                    isinstance(node.test.ops[0], ast.Eq)):
+                                    
+                                    # Check comparators (handle Constant/Str differences across Py versions)
+                                    comp = node.test.comparators[0]
+                                    val = None
+                                    if isinstance(comp, ast.Constant):
+                                        val = comp.value
+                                    elif hasattr(ast, 'Str') and isinstance(comp, ast.Str):
+                                        val = comp.s
+                                        
+                                    if val == '__main__':
+                                        is_main = True
+                            except Exception:
+                                pass
                 if is_main:
+                     # Transformation 0: Convert print(list(iterable)) to incremental print loop
+                     for j, subnode in enumerate(node.body):
+                         if (isinstance(subnode, ast.Expr) and 
+                             isinstance(subnode.value, ast.Call) and
+                             isinstance(subnode.value.func, ast.Name) and 
+                             subnode.value.func.id == 'print' and
+                             len(subnode.value.args) == 1 and
+                             isinstance(subnode.value.args[0], ast.Call) and
+                             isinstance(subnode.value.args[0].func, ast.Name) and
+                             subnode.value.args[0].func.id == 'list' and
+                             len(subnode.value.args[0].args) == 1):
+                             
+                             # Found print(list(iterable))
+                             iterable_arg = subnode.value.args[0].args[0]
+                             
+                             # Create For loop: for _oeis_print_iter in iterable_arg: print(_oeis_print_iter)
+                             iter_var = ast.Name(id='_oeis_print_iter', ctx=ast.Store())
+                             print_call = ast.Call(
+                                 func=ast.Name(id='print', ctx=ast.Load()),
+                                 args=[ast.Name(id='_oeis_print_iter', ctx=ast.Load())],
+                                 keywords=[]
+                             )
+                             
+                             for_loop = ast.For(
+                                 target=iter_var,
+                                 iter=iterable_arg,
+                                 body=[ast.Expr(value=print_call)],
+                                 orelse=[]
+                             )
+                             
+                             ast.copy_location(for_loop, subnode)
+                             ast.fix_missing_locations(for_loop)
+                             node.body[j] = for_loop
+                             modified = True
+
                      # Scan body for print([ListComp])
                      for j, subnode in enumerate(node.body):
                          if (isinstance(subnode, ast.Expr) and 
@@ -812,6 +848,7 @@ def run_test_for_code(a_num, code, offset, expected_terms, timeout, original_cod
         except Exception as e:
             report_messages.append(f"  Function '{func_name}(n)': ERROR: {e}")
             failures = -1
+            func_failure_idx = len(report_messages) - 1
         finally:
             signal.alarm(0)
             duration = time.time() - start_time
@@ -906,8 +943,10 @@ def run_test_for_code(a_num, code, offset, expected_terms, timeout, original_cod
                         func_failure_idx = len(report_messages) - 1
                 except Exception as e:
                      report_messages.append(f"  Function '{first_func_name}(n)': ERROR: {e}")
+                     func_failure_idx = len(report_messages) - 1
         except TimeoutError:
              report_messages.append(f"  Function '{first_func_name}(n)': TIMEOUT")
+             func_failure_idx = len(report_messages) - 1
         finally:
             signal.alarm(0)
 
@@ -1025,7 +1064,6 @@ def run_test_for_code(a_num, code, offset, expected_terms, timeout, original_cod
             for node in tree.body:
                 if isinstance(node, ast.If):
                     # Check for basic "if __name__ == '__main__':" pattern
-                    is_main = False
                     try:
                         if (isinstance(node.test, ast.Compare) and 
                             isinstance(node.test.left, ast.Name) and node.test.left.id == '__name__' and
@@ -1045,6 +1083,41 @@ def run_test_for_code(a_num, code, offset, expected_terms, timeout, original_cod
                         pass
                     
                     if is_main:
+                        # Transformation 0: Convert print(list(iterable)) to incremental print loop
+                        for j, subnode in enumerate(node.body):
+                            if (isinstance(subnode, ast.Expr) and 
+                                isinstance(subnode.value, ast.Call) and
+                                isinstance(subnode.value.func, ast.Name) and 
+                                subnode.value.func.id == 'print' and
+                                len(subnode.value.args) == 1 and
+                                isinstance(subnode.value.args[0], ast.Call) and
+                                isinstance(subnode.value.args[0].func, ast.Name) and
+                                subnode.value.args[0].func.id == 'list' and
+                                len(subnode.value.args[0].args) == 1):
+                                
+                                # Found print(list(iterable))
+                                iterable_arg = subnode.value.args[0].args[0]
+                                
+                                # Create For loop: for _oeis_print_iter in iterable_arg: print(_oeis_print_iter)
+                                iter_var = ast.Name(id='_oeis_print_iter', ctx=ast.Store())
+                                print_call = ast.Call(
+                                    func=ast.Name(id='print', ctx=ast.Load()),
+                                    args=[ast.Name(id='_oeis_print_iter', ctx=ast.Load())],
+                                    keywords=[]
+                                )
+                                
+                                for_loop = ast.For(
+                                    target=iter_var,
+                                    iter=iterable_arg,
+                                    body=[ast.Expr(value=print_call)],
+                                    orelse=[]
+                                )
+                                
+                                ast.copy_location(for_loop, subnode)
+                                ast.fix_missing_locations(for_loop)
+                                node.body[j] = for_loop
+                                modified = True
+
                         # Transformation 1: Convert print([ListComp]) to incremental print loop
                         for j, subnode in enumerate(node.body):
                              if (isinstance(subnode, ast.Expr) and 
@@ -1122,6 +1195,8 @@ def run_test_for_code(a_num, code, offset, expected_terms, timeout, original_cod
         except TimeoutError:
              pass
         except Exception as e:
+             if not tests_run:
+                 report_messages.append(f"  [ERROR] Execution failed: {e}")
              # If AST processing fails for some reason, try one last raw exec
              try:
                  exec(code, context)
@@ -1182,6 +1257,7 @@ def run_test_for_code(a_num, code, offset, expected_terms, timeout, original_cod
                 else:
                      detail = compare_lists(expected_terms[:match_len], res_list[:match_len])
                      report_messages.append(f"  Script variable '{a_num}': FAIL ({detail})")
+                     func_failure_idx = len(report_messages) - 1
 
         # If we were retrying because of an unpopulated list, check that list again first!
         if not tests_run and run_guarded_fallback and is_list_based and func_name in context:
@@ -1244,7 +1320,9 @@ def run_test_for_code(a_num, code, offset, expected_terms, timeout, original_cod
                  report_messages.append("  [INFO] Script produced output but no numbers found.")
 
     if not tests_run:
-        report_messages.append("  [ERROR] No known test functions found (expected 'a(n)', 'first(n)', or 'is(n)').")
+        has_exec_error = any("[ERROR] Execution failed" in m for m in report_messages)
+        if not has_exec_error:
+            report_messages.append("  [ERROR] No known test functions found (expected 'a(n)', 'first(n)', or 'is(n)').")
     
     return [m for m in report_messages if m is not None]
 
